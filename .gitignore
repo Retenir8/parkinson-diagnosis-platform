@@ -1,0 +1,26 @@
+# Frontend
+apps/desktop/node_modules/
+apps/desktop/dist/
+apps/desktop/src-tauri/target/
+apps/desktop/*.log
+
+# Python
+server/.venv/
+server/**/__pycache__/
+server/.pytest_cache/
+server/.coverage
+*.py[cod]
+
+# Local clinical data: never commit patient information or source media.
+data/*
+!data/README.md
+
+# Desktop/build artifacts
+*.exe
+*.msi
+*.nsis.zip
+
+# Local environment files
+.env
+apps/desktop/.env
+server/.env

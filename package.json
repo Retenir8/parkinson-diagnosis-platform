@@ -1,0 +1,15 @@
+{
+  "name": "multimodal-clinical-assessment-workspace",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "setup:frontend": "npm --prefix apps/desktop install",
+    "dev:web": "npm --prefix apps/desktop run dev:browser",
+    "dev:frontend": "npm --prefix apps/desktop run dev:web",
+    "dev:desktop": "npm --prefix apps/desktop run dev:desktop",
+    "build:web": "npm --prefix apps/desktop run build",
+    "build:desktop": "npm --prefix apps/desktop run build:desktop",
+    "typecheck": "npm --prefix apps/desktop run typecheck",
+    "test:server": "cd server && .venv\\Scripts\\python.exe -m pytest"
+  }
+}

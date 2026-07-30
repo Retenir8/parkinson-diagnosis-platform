@@ -1,0 +1,17 @@
+[package]
+name = "multimodal-clinical-assessment"
+version = "0.1.0"
+description = "Local multimodal clinical movement assessment desktop shell"
+authors = ["Medical Innovation Team"]
+edition = "2021"
+
+[lib]
+name = "multimodal_clinical_assessment_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
