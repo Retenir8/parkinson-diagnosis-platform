@@ -1,5 +1,19 @@
-"""Built-in module providers.
+from app.modules.providers.hand_motion import HandMotionModule
+from app.modules.providers.leg_motion import LegMotionModule
+from app.modules.providers.overall_posture import OverallPostureModule
+from app.modules.providers.external import (
+    ExternalModulePlaceholder,
+    hand_module,
+    insole_module,
+    leg_module,
+)
 
-Only contracts and readiness probes live here until each model team supplies
-its confirmed runtime and input/output specification.
-"""
+__all__ = [
+    "ExternalModulePlaceholder",
+    "HandMotionModule",
+    "LegMotionModule",
+    "OverallPostureModule",
+    "hand_module",
+    "insole_module",
+    "leg_module",
+]

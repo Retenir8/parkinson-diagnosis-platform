@@ -76,7 +76,7 @@ def test_patient_artifact_and_assessment_flow(
     assert assessment_response.status_code == 201
     assessment = assessment_response.json()
     assert assessment["status"] == "draft"
-    assert "固定映射" in assessment["status_detail"]
+    assert "映射" in assessment["status_detail"]
     assert assessment["module_inputs"]["overall-posture"][
         "analysis_source"
     ] == [artifact["id"]]
@@ -144,7 +144,7 @@ def test_rejects_cross_module_artifact_mapping(client: TestClient) -> None:
         json={
             "patient_id": patient["id"],
             "module_inputs": {
-                "leg-motion": {"leg_video": [artifact["id"]]}
+                "leg-motion": {"toe_tapping_video": [artifact["id"]]}
             },
         },
     )
@@ -159,5 +159,6 @@ def test_module_descriptors_define_input_slots(client: TestClient) -> None:
     modules = {item["id"]: item for item in response.json()}
     assert modules["overall-posture"]["input_slots"][0]["key"] == "analysis_source"
     assert modules["hand-motion"]["input_slots"][0]["key"] == "hand_video"
-    assert modules["leg-motion"]["input_slots"][0]["key"] == "leg_video"
+    leg_slots = {s["key"] for s in modules["leg-motion"]["input_slots"]}
+    assert leg_slots == {"toe_tapping_video", "leg_agility_video"}
     assert modules["smart-insole"]["input_slots"][0]["key"] == "insole_data"

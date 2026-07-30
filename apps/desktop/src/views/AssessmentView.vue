@@ -14,7 +14,7 @@ import {
   Upload,
   UserRound,
 } from "@lucide/vue";
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useRoute } from "vue-router";
 
 import EmptyState from "@/components/EmptyState.vue";
@@ -228,6 +228,64 @@ function moduleName(moduleId: string) {
 
 function hasResultValues(value: Record<string, unknown>) {
   return Object.keys(value).length > 0;
+}
+
+const TASK_LABELS: Record<string, string> = {
+  finger_opposition: "手指对指",
+  hand_alternation: "手掌轮替",
+  fist_clenching: "握拳",
+  toe_tapping: "脚趾拍地",
+  leg_agility: "抬腿灵活性",
+};
+
+function taskLabel(taskName: string) {
+  return TASK_LABELS[taskName] ?? taskName;
+}
+
+// ---- auto-polling ----
+let pollTimer: ReturnType<typeof setInterval> | null = null;
+
+function startPolling() {
+  if (pollTimer) return;
+  pollTimer = setInterval(async () => {
+    if (!assessment.value) return;
+    const hasRunning = Object.values(
+      assessment.value.module_runs,
+    ).some((r) => r.status === "running");
+    if (!hasRunning) {
+      stopPolling();
+      return;
+    }
+    try {
+      assessment.value = await api.getAssessment(assessment.value.id);
+    } catch {
+      // ignore polling errors
+    }
+  }, 3000);
+}
+
+function stopPolling() {
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+}
+
+onUnmounted(() => stopPolling());
+
+async function runInference() {
+  if (!assessment.value) return;
+  running.value = true;
+  actionError.value = "";
+  try {
+    assessment.value = await api.runAssessment(assessment.value.id);
+    startPolling();
+  } catch (error) {
+    actionError.value =
+      error instanceof Error ? error.message : "推理启动失败。";
+  } finally {
+    running.value = false;
+  }
 }
 
 async function createAssessment() {
@@ -595,11 +653,76 @@ onMounted(async () => {
                 <StatusPill :status="run.status" />
               </header>
 
-              <div v-if="run.result" class="result-values">
+              <!-- Structured task results (hand / leg modules) -->
+              <div
+                v-if="run.result && run.result.result_data && run.result.result_data.tasks"
+                class="task-results"
+              >
                 <p v-if="run.result.summary" class="result-summary">
                   {{ run.result.summary }}
                 </p>
+                <table class="score-table">
+                  <thead>
+                    <tr>
+                      <th>任务</th>
+                      <th>左侧</th>
+                      <th>右侧</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr
+                      v-for="(taskResult, taskName) in run.result.result_data.tasks"
+                      :key="taskName"
+                    >
+                      <td class="task-label">{{ taskLabel(taskName) }}</td>
+                      <td
+                        v-for="side in ['left', 'right']"
+                        :key="side"
+                        :class="[
+                          'score-cell',
+                          taskResult[side]?.status === 'INCOMPLETE'
+                            ? 'incomplete'
+                            : 'complete',
+                        ]"
+                      >
+                        <span class="score-value">
+                          {{ taskResult[side]?.score ?? "—" }}
+                        </span>
+                        <span class="score-count">
+                          {{ taskResult[side]?.detected_actions ?? 0 }}次
+                        </span>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
 
+                <!-- Flat metrics for reference -->
+                <details class="metrics-details">
+                  <summary>详细指标</summary>
+                  <dl>
+                    <div
+                      v-for="(value, key) in run.result.metrics"
+                      :key="key"
+                    >
+                      <dt>{{ key }}</dt>
+                      <dd>{{ value ?? "—" }}</dd>
+                    </div>
+                  </dl>
+                </details>
+
+                <ul v-if="run.result.warnings.length" class="result-warnings">
+                  <li v-for="warning in run.result.warnings" :key="warning">
+                    <CircleAlert :size="14" />
+                    {{ warning }}
+                  </li>
+                </ul>
+              </div>
+
+              <!-- Generic result (non-task-structured modules) -->
+              <div v-else-if="run.result" class="result-values">
+                <p v-if="run.result.summary" class="result-summary">
+                  {{ run.result.summary }}
+                </p>
                 <div
                   v-if="hasResultValues(run.result.scores)"
                   class="result-section"
@@ -611,27 +734,10 @@ onMounted(async () => {
                       :key="key"
                     >
                       <dt>{{ key }}</dt>
-                      <dd>{{ value ?? "无" }}</dd>
+                      <dd>{{ value ?? "—" }}</dd>
                     </div>
                   </dl>
                 </div>
-
-                <div
-                  v-if="hasResultValues(run.result.metrics)"
-                  class="result-section"
-                >
-                  <strong>指标输出</strong>
-                  <dl>
-                    <div
-                      v-for="(value, key) in run.result.metrics"
-                      :key="key"
-                    >
-                      <dt>{{ key }}</dt>
-                      <dd>{{ value ?? "无" }}</dd>
-                    </div>
-                  </dl>
-                </div>
-
                 <div
                   v-if="hasResultValues(run.result.result_data)"
                   class="result-section"
@@ -641,9 +747,9 @@ onMounted(async () => {
                     JSON.stringify(run.result.result_data, null, 2)
                   }}</pre>
                 </div>
-
                 <ul v-if="run.result.warnings.length" class="result-warnings">
                   <li v-for="warning in run.result.warnings" :key="warning">
+                    <CircleAlert :size="14" />
                     {{ warning }}
                   </li>
                 </ul>
@@ -657,6 +763,38 @@ onMounted(async () => {
                 </div>
               </div>
             </article>
+
+            <!-- Run button if any modules are queued -->
+            <div
+              v-if="Object.values(assessment.module_runs).some((r) => r.status === 'queued')"
+              class="assessment-submit-bar"
+            >
+              <div>
+                <Play :size="20" />
+                <span>
+                  <strong>模块就绪，等待执行</strong>
+                  <small>点击按钮启动所有已排队模块的推理</small>
+                </span>
+              </div>
+              <button
+                class="button primary prominent"
+                type="button"
+                :disabled="running"
+                @click="runInference"
+              >
+                <Play :size="17" fill="currentColor" />
+                {{ running ? "推理中…" : "执行推理" }}
+              </button>
+            </div>
+
+            <!-- Auto-refresh hint when running -->
+            <div
+              v-if="Object.values(assessment.module_runs).some((r) => r.status === 'running')"
+              class="inline-alert info"
+            >
+              <RefreshCw :size="16" class="spinning" />
+              推理进行中，页面每 3 秒自动刷新…
+            </div>
           </div>
         </section>
       </aside>

@@ -109,6 +109,11 @@ export const api = {
   getAssessment: (assessmentId: string) =>
     request<Assessment>(`/assessments/${assessmentId}`),
 
+  runAssessment: (assessmentId: string) =>
+    request<Assessment>(`/assessments/${assessmentId}/run`, {
+      method: "POST",
+    }),
+
   listReports: (patientId?: string) =>
     request<ReportSummary[]>(
       `/reports${patientId ? `?patient_id=${patientId}` : ""}`,

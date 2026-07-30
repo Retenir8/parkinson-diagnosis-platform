@@ -1481,6 +1481,126 @@ p {
   line-height: 1.6;
 }
 
+.result-warnings li {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+/* ---- structured task score table ---- */
+.task-results {
+  padding: 12px;
+}
+
+.score-table {
+  width: 100%;
+  margin: 8px 0;
+  border-collapse: collapse;
+  font-size: 9px;
+}
+
+.score-table th {
+  padding: 7px 10px;
+  text-align: left;
+  color: var(--ink-500);
+  border-bottom: 1px solid var(--line);
+  font-size: 8px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.score-table th:not(:first-child) {
+  text-align: center;
+}
+
+.score-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line-soft);
+  vertical-align: middle;
+}
+
+.score-table .task-label {
+  color: var(--ink-700);
+  font-weight: 650;
+}
+
+.score-table .score-cell {
+  text-align: center;
+}
+
+.score-table .score-cell.complete .score-value {
+  display: inline-block;
+  min-width: 28px;
+  padding: 3px 8px;
+  color: #1b6d3c;
+  border-radius: 12px;
+  background: #dcfce7;
+  font-weight: 750;
+  font-size: 14px;
+}
+
+.score-table .score-cell.incomplete .score-value {
+  display: inline-block;
+  min-width: 28px;
+  padding: 3px 8px;
+  color: #8a631f;
+  border-radius: 12px;
+  background: #fff9eb;
+  font-weight: 750;
+  font-size: 14px;
+}
+
+.score-table .score-count {
+  display: block;
+  margin-top: 3px;
+  color: var(--ink-400);
+  font-size: 7px;
+}
+
+.metrics-details {
+  margin-top: 8px;
+  font-size: 8px;
+  color: var(--ink-500);
+}
+
+.metrics-details summary {
+  cursor: pointer;
+  color: var(--ink-600);
+  font-weight: 650;
+}
+
+.metrics-details dl {
+  margin: 6px 0 0;
+  overflow: hidden;
+  border: 1px solid var(--line-soft);
+  border-radius: 7px;
+}
+
+.metrics-details dl > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 7px;
+}
+
+.metrics-details dl > div:last-child {
+  border-bottom: 0;
+}
+
+.metrics-details dt {
+  color: var(--ink-500);
+}
+
+.metrics-details dd {
+  margin: 0;
+  color: var(--ink-900);
+  font-weight: 650;
+}
+
 .assessment-main {
   display: flex;
   flex-direction: column;
