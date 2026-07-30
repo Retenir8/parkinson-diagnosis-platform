@@ -2,3 +2,10 @@ fastapi>=0.116,<1
 uvicorn[standard]>=0.35,<1
 python-multipart>=0.0.20,<1
 pydantic>=2.11,<3
+
+# 手部/腿部运动分析模块依赖
+numpy>=1.24
+opencv-python>=4.8
+mediapipe>=0.10.0
+# pyrealsense2 — 需从 Intel 源单独安装：
+#   pip install pyrealsense2

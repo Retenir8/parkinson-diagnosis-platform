@@ -24,3 +24,13 @@ data/*
 .env
 apps/desktop/.env
 server/.env
+
+# Bag files & test data (large binaries, never commit)
+*.bag
+!data/README.md
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
