@@ -2,12 +2,13 @@
 直接推理测试 — 绕过 API，直接调用 HandMotionModule / LegMotionModule
 ====================================================================
 使用方式：
-    cd E:/aiMDS/parkinson-diagnosis-platform/server
+    cd <project>/server
     python tests/test_inference.py
 
 前提：已 pip install numpy opencv-python mediapipe pyrealsense2
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -18,9 +19,16 @@ from app.modules.providers.hand_motion import HandMotionModule
 from app.modules.providers.leg_motion import LegMotionModule
 from app.schemas.modules import InferenceRequest, InputArtifact
 
-HAND_BAG = Path(r"E:\aiMDS\bag\20260421.bag")
-TOE_BAG  = Path(r"E:\aiMDS\bag\20260603_113005_2.bag")
-LEG_BAG  = Path(r"E:\aiMDS\bag\20260603_113005_3.bag")
+DATA_DIR = Path(
+    os.getenv(
+        "MEDVISION_DATA_DIR",
+        Path(__file__).resolve().parents[2] / "data",
+    )
+).resolve()
+SAMPLE_DIR = DATA_DIR / "samples"
+HAND_BAG = SAMPLE_DIR / "hand" / "hand_motion.bag"
+TOE_BAG = SAMPLE_DIR / "leg" / "toe_tapping.bag"
+LEG_BAG = SAMPLE_DIR / "leg" / "leg_agility.bag"
 
 
 def test_hand():

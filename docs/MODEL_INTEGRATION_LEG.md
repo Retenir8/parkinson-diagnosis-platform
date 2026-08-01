@@ -9,7 +9,7 @@
 - 模型格式：纯 Python 代码（无独立模型文件），基于 MediaPipe Pose 关键点 + 规则阈值状态机
 - Python/运行时版本：Python ≥ 3.10
 - CPU/GPU/驱动要求：CPU 即可（MediaPipe Pose 支持 CPU 推理）
-- 依赖锁文件位置：`server/requirements.txt`
+- 依赖锁文件位置：`server/requirements.txt`（当前代码使用 `mp.solutions`，固定 MediaPipe `0.10.21`）
 - 模型文件及许可证：MediaPipe Pose (Apache 2.0)
 
 ## 输入协议
@@ -64,6 +64,7 @@ side ∈ {`left`, `right`}
 - 推理耗时：每段约 10-15 秒（含 MediaPipe Pose 检测 + 评分）
 - 峰值内存/显存：~1.5 GB RAM
 - 测试脚本：`server/tests/test_inference.py`
+- 匿名测试样例位置：`data/samples/leg/toe_tapping.bag`、`data/samples/leg/leg_agility.bag`
 - 失败/异常样例：
   - 腿部遮挡严重 → `INCOMPLETE` + 警告
   - 无深度数据 → 回退到 2D 信号

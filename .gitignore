@@ -8,6 +8,7 @@ apps/desktop/*.log
 server/.venv/
 server/**/__pycache__/
 server/.pytest_cache/
+.pytest_cache/
 server/.coverage
 *.py[cod]
 
@@ -24,6 +25,9 @@ data/*
 .env
 apps/desktop/.env
 server/.env
+
+# Local UI/smoke-check artifacts
+.ui-check-*
 
 # Bag files & test data (large binaries, never commit)
 *.bag

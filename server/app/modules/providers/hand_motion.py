@@ -28,6 +28,7 @@ from app.modules.base import (
     ModuleUnavailableError,
     ProgressCallback,
 )
+from app.modules.mediapipe_compat import prepare_legacy_solutions
 from app.schemas.modules import (
     InputSlotDescriptor,
     InferenceRequest,
@@ -528,8 +529,11 @@ class HandMotionModule(InferenceModule):
             issues.append("缺少 pyrealsense2 库，无法播放 RealSense .bag 文件。")
         try:
             import mediapipe  # noqa
+            prepare_legacy_solutions()
         except ImportError:
             issues.append("缺少 mediapipe 库，无法进行手部关键点检测。")
+        except RuntimeError as error:
+            issues.append(str(error))
 
         return issues
 
@@ -537,6 +541,7 @@ class HandMotionModule(InferenceModule):
         import pyrealsense2 as rs
         import mediapipe as mp
         import cv2
+        prepare_legacy_solutions()
 
         artifacts = request.artifacts
         if not artifacts:

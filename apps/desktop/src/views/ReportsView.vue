@@ -1,26 +1,33 @@
 <script setup lang="ts">
 import {
-  Download,
+  CalendarDays,
+  CircleAlert,
   FileClock,
   FileText,
   Filter,
+  Printer,
   Search,
+  ShieldCheck,
+  UserRound,
 } from "@lucide/vue";
 import { computed, onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
 
+import AssessmentModuleResult from "@/components/AssessmentModuleResult.vue";
 import EmptyState from "@/components/EmptyState.vue";
 import StatusPill from "@/components/StatusPill.vue";
 import { api } from "@/services/api";
 import { usePatientsStore } from "@/stores/patients";
-import type { ReportSummary } from "@/types/domain";
+import type { ReportDetail, ReportSummary } from "@/types/domain";
 
 const route = useRoute();
 const patients = usePatientsStore();
 const reports = ref<ReportSummary[]>([]);
+const selectedReport = ref<ReportDetail | null>(null);
 const selectedPatientId = ref("");
 const keyword = ref("");
 const loading = ref(false);
+const detailLoading = ref(false);
 const error = ref("");
 
 const filteredReports = computed(() => {
@@ -43,14 +50,35 @@ function formatDate(value: string) {
   }).format(new Date(value));
 }
 
+function formatConfidence(value?: number | null) {
+  return typeof value === "number" ? `${(value * 100).toFixed(1)}%` : "—";
+}
+
+function printReport() {
+  window.print();
+}
+
+async function openReport(reportId: string) {
+  detailLoading.value = true;
+  error.value = "";
+  try {
+    selectedReport.value = await api.getReport(reportId);
+  } catch (caught) {
+    error.value = caught instanceof Error ? caught.message : "报告详情读取失败。";
+  } finally {
+    detailLoading.value = false;
+  }
+}
+
 async function loadReports() {
   loading.value = true;
   error.value = "";
+  selectedReport.value = null;
   try {
     reports.value = await api.listReports(selectedPatientId.value || undefined);
+    if (reports.value[0]) await openReport(reports.value[0].id);
   } catch (caught) {
-    error.value =
-      caught instanceof Error ? caught.message : "报告列表读取失败。";
+    error.value = caught instanceof Error ? caught.message : "报告列表读取失败。";
   } finally {
     loading.value = false;
   }
@@ -58,35 +86,38 @@ async function loadReports() {
 
 onMounted(async () => {
   await patients.load();
-  const patientFromQuery =
+  selectedPatientId.value =
     typeof route.query.patient === "string" ? route.query.patient : "";
-  selectedPatientId.value = patientFromQuery;
   await loadReports();
 });
 </script>
 
 <template>
-  <div class="view-stack">
+  <div class="view-stack report-center-page">
     <section class="summary-strip report-summary">
       <div class="summary-copy">
         <span class="section-kicker">Clinical Reports</span>
         <h2>多模态评估报告中心</h2>
-        <p>
-          报告模板将聚合姿态、手部、腿部和鞋垫模块；未确认评分规则前不生成综合分。
-        </p>
+      </div>
+      <div class="severity-legend">
+        <span class="severity-dot healthy" />健康
+        <span class="severity-dot mild" />轻度
+        <span class="severity-dot moderate_severe" />中重度
       </div>
       <div class="summary-stat">
         <span>可用报告</span>
         <strong>{{ reports.filter((item) => item.status === "ready").length }}</strong>
-        <small>本地归档</small>
       </div>
     </section>
 
-    <section class="content-card">
+    <div v-if="error" class="inline-alert error">
+      <CircleAlert :size="17" />{{ error }}
+    </div>
+
+    <section class="content-card report-browser">
       <header class="card-header report-toolbar">
         <div>
-          <h2>报告列表</h2>
-          <p>筛选患者并检索已生成报告</p>
+          <h2>报告档案</h2>
         </div>
         <div class="toolbar-actions">
           <label class="compact-select">
@@ -109,63 +140,136 @@ onMounted(async () => {
         </div>
       </header>
 
-      <div v-if="error" class="inline-alert error">{{ error }}</div>
       <div v-if="loading" class="table-loading">
-        <span class="spinner" />
-        正在读取本地报告索引…
+        <span class="spinner" />正在读取本地评估报告…
       </div>
 
-      <div v-else-if="filteredReports.length" class="table-wrap">
-        <table class="data-table report-table">
-          <thead>
-            <tr>
-              <th>报告</th>
-              <th>患者</th>
-              <th>生成时间</th>
-              <th>状态</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="report in filteredReports" :key="report.id">
-              <td>
-                <div class="report-name">
-                  <span><FileText :size="19" /></span>
-                  <div>
-                    <strong>{{ report.title }}</strong>
-                    <small>{{ report.id }}</small>
-                  </div>
+      <div v-else-if="filteredReports.length" class="report-browser-grid">
+        <aside class="report-index-list">
+          <button
+            v-for="report in filteredReports"
+            :key="report.id"
+            type="button"
+            class="report-index-item"
+            :class="{ active: selectedReport?.id === report.id }"
+            @click="openReport(report.id)"
+          >
+            <span class="report-index-icon"><FileText :size="18" /></span>
+            <span class="report-index-copy">
+              <strong>{{ report.patient_name }}</strong>
+              <small>{{ formatDate(report.created_at) }}</small>
+              <em>{{ report.completed_module_count }} 个模块已完成</em>
+            </span>
+            <span
+              class="report-severity-mini"
+              :class="`severity-${report.severity?.code ?? 'unavailable'}`"
+            >
+              {{ report.severity?.label ?? "暂无法分层" }}
+            </span>
+          </button>
+        </aside>
+
+        <main class="report-detail-pane">
+          <div v-if="detailLoading" class="table-loading">
+            <span class="spinner" />正在生成结构化报告…
+          </div>
+          <template v-else-if="selectedReport">
+            <header class="clinical-report-header">
+              <div>
+                <span class="section-kicker">Motor Function Assessment</span>
+                <h1>多模态运动功能评估报告</h1>
+                <p>报告编号 {{ selectedReport.id }}</p>
+              </div>
+              <button class="button secondary print-button" type="button" @click="printReport">
+                <Printer :size="16" />打印 / 导出 PDF
+              </button>
+            </header>
+
+            <section class="report-patient-strip">
+              <div>
+                <UserRound :size="18" />
+                <span>患者<strong>{{ selectedReport.patient_name }}</strong></span>
+              </div>
+              <div>
+                <ShieldCheck :size="18" />
+                <span>档案编号<strong>{{ selectedReport.patient_code }}</strong></span>
+              </div>
+              <div>
+                <CalendarDays :size="18" />
+                <span>评估时间<strong>{{ formatDate(selectedReport.created_at) }}</strong></span>
+              </div>
+              <StatusPill :status="selectedReport.assessment_status" />
+            </section>
+
+            <section
+              class="report-severity-banner"
+              :class="`severity-${selectedReport.severity?.code ?? 'unavailable'}`"
+            >
+              <div>
+                <span>模型分层结果</span>
+                <strong>{{ selectedReport.severity?.label ?? "暂无法分层" }}</strong>
+                <p>{{ selectedReport.severity?.basis }}</p>
+              </div>
+              <div class="severity-confidence">
+                <span>模型置信度</span>
+                <strong>{{ formatConfidence(selectedReport.severity?.confidence) }}</strong>
+              </div>
+              <div class="severity-scale">
+                <span :class="{ active: selectedReport.severity?.code === 'healthy' }">健康</span>
+                <span :class="{ active: selectedReport.severity?.code === 'mild' }">轻度</span>
+                <span :class="{ active: selectedReport.severity?.code === 'moderate_severe' }">中重度</span>
+              </div>
+            </section>
+
+            <section class="report-module-section">
+              <header>
+                <div>
+                  <span class="section-kicker">Detailed Findings</span>
+                  <h2>分模块详细指标</h2>
                 </div>
-              </td>
-              <td>{{ report.patient_name }}</td>
-              <td>{{ formatDate(report.created_at) }}</td>
-              <td><StatusPill :status="report.status" /></td>
-              <td>
-                <button
-                  class="button small secondary"
-                  type="button"
-                  :disabled="report.status !== 'ready' || !report.file_name"
-                >
-                  <Download :size="15" />
-                  导出
-                </button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
+                <span>{{ selectedReport.completed_module_count }} 个有效模块</span>
+              </header>
+
+              <article
+                v-for="module in selectedReport.modules"
+                :key="module.module_id"
+                class="report-module-card"
+              >
+                <header>
+                  <div>
+                    <h3>{{ module.display_name }}</h3>
+                    <p>{{ module.result?.summary ?? module.status_detail }}</p>
+                  </div>
+                  <StatusPill :status="module.status" />
+                </header>
+                <AssessmentModuleResult
+                  v-if="module.result"
+                  :assessment-id="selectedReport.assessment_id"
+                  :module-id="module.module_id"
+                  :result="module.result"
+                />
+                <div v-else class="module-analysis-pending">
+                  <FileClock :size="20" />
+                  <div><strong>本模块没有有效结果</strong><p>{{ module.status_detail }}</p></div>
+                </div>
+              </article>
+            </section>
+
+            <div class="report-disclaimer">
+              <CircleAlert :size="17" />
+              <div><strong>结果解释声明</strong><p>{{ selectedReport.disclaimer }}</p></div>
+            </div>
+          </template>
+        </main>
       </div>
 
       <EmptyState
         v-else
         title="暂无可显示报告"
-        description="完成真实模型接入和报告字段确认后，报告将在这里按患者归档。"
+        description="完成分析后，报告会显示在这里。"
       >
-        <template #icon>
-          <FileClock :size="25" />
-        </template>
-        <RouterLink class="button secondary" to="/assessment">
-          前往采集评估
-        </RouterLink>
+        <template #icon><FileClock :size="25" /></template>
+        <RouterLink class="button secondary" to="/assessment">前往采集评估</RouterLink>
       </EmptyState>
     </section>
   </div>

@@ -102,9 +102,6 @@ onMounted(() => patients.load());
       <div class="summary-copy">
         <span class="section-kicker">Patient Registry</span>
         <h2>患者档案与连续评估记录</h2>
-        <p>
-          当前档案仅保存在本机 data 目录；报告、原始资料与患者编号保持关联。
-        </p>
       </div>
       <div class="summary-stat">
         <span>本地患者</span>
@@ -121,7 +118,6 @@ onMounted(() => patients.load());
       <header class="card-header">
         <div>
           <h2>患者列表</h2>
-          <p>按患者编号、姓名、电话或诊断关键字检索</p>
         </div>
         <form class="search-box" @submit.prevent="runSearch">
           <Search :size="18" />
@@ -245,7 +241,7 @@ onMounted(() => patients.load());
       <EmptyState
         v-else
         title="暂无患者档案"
-        description="创建第一位患者，或调整检索条件。系统不会预置虚构患者数据。"
+        description="创建患者后即可开始评估。"
       >
         <template #icon>
           <UserRound :size="24" />
@@ -261,7 +257,7 @@ onMounted(() => patients.load());
   <BaseModal
     :open="createOpen"
     title="新建患者档案"
-    description="患者编号和姓名为当前最小必填信息，其他字段可后续补充。"
+    description="患者编号和姓名必填。"
     @close="createOpen = false"
   >
     <form id="patient-form" class="form-grid" @submit.prevent="submitPatient">

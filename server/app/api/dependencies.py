@@ -7,6 +7,7 @@ from app.repositories.artifacts import ArtifactRepository
 from app.repositories.assessments import AssessmentRepository
 from app.repositories.patients import PatientRepository
 from app.repositories.reports import ReportRepository
+from app.repositories.segmentation import SegmentationRepository
 
 
 def get_patient_repository(
@@ -31,3 +32,9 @@ def get_report_repository(
     settings: Settings = Depends(get_settings),
 ) -> ReportRepository:
     return ReportRepository(settings.data_dir)
+
+
+def get_segmentation_repository(
+    settings: Settings = Depends(get_settings),
+) -> SegmentationRepository:
+    return SegmentationRepository(settings.data_dir)

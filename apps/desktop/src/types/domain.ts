@@ -127,6 +127,44 @@ export interface ReportSummary {
   status: "draft" | "ready" | "failed";
   created_at: string;
   file_name?: string | null;
+  severity?: ReportSeverity | null;
+  completed_module_count: number;
+}
+
+export type SeverityCode =
+  | "healthy"
+  | "mild"
+  | "moderate_severe"
+  | "unavailable";
+
+export interface ReportSeverity {
+  code: SeverityCode;
+  label: string;
+  class_value?: number | null;
+  confidence?: number | null;
+  source_module_id?: string | null;
+  source_score_key?: string | null;
+  basis: string;
+  research_only: boolean;
+}
+
+export interface ReportModule {
+  module_id: string;
+  display_name: string;
+  status: ModuleRunRecord["status"];
+  status_detail: string;
+  result?: ModuleResult | null;
+}
+
+export interface ReportDetail extends ReportSummary {
+  patient_code: string;
+  patient_gender: PatientGender;
+  patient_birth_date?: string | null;
+  patient_diagnosis?: string | null;
+  assessment_status: Assessment["status"];
+  assessment_status_detail: string;
+  modules: ReportModule[];
+  disclaimer: string;
 }
 
 export interface HealthStatus {
@@ -134,4 +172,34 @@ export interface HealthStatus {
   service: string;
   version: string;
   data_dir: string;
+}
+
+export interface VideoSegment {
+  segment_id: string;
+  label: string;
+  task_type: string;
+  start_s: number;
+  end_s: number;
+}
+
+export interface SegmentationProject {
+  id: string;
+  name: string;
+  original_name: string;
+  source_kind: "video" | "realsense_bag";
+  source_file: string;
+  preview_file?: string | null;
+  preview_available: boolean;
+  status: "processing" | "ready" | "failed";
+  status_detail: string;
+  duration_s?: number | null;
+  preview_duration_s?: number | null;
+  fps?: number | null;
+  width?: number | null;
+  height?: number | null;
+  archive_path: string;
+  walk_distance_m?: number | null;
+  segments: VideoSegment[];
+  created_at: string;
+  updated_at: string;
 }

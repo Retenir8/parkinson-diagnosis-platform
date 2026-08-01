@@ -2,13 +2,15 @@
 import {
   ClipboardPlus,
   FileText,
-  HeartPulse,
+  Scissors,
   Settings,
+  ShieldCheck,
   Users,
 } from "@lucide/vue";
 import { computed, onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
 
+import ClinicalBrandMark from "@/components/ClinicalBrandMark.vue";
 import { api } from "@/services/api";
 
 const route = useRoute();
@@ -28,6 +30,12 @@ const navItems = [
     icon: ClipboardPlus,
   },
   {
+    to: "/video-segmentation",
+    label: "视频分割",
+    description: "人工时间轴标注",
+    icon: Scissors,
+  },
+  {
     to: "/reports",
     label: "报告中心",
     description: "报告生成与导出",
@@ -44,9 +52,6 @@ const navItems = [
 const pageTitle = computed(() =>
   typeof route.meta.title === "string" ? route.meta.title : "",
 );
-const pageSubtitle = computed(() =>
-  typeof route.meta.subtitle === "string" ? route.meta.subtitle : "",
-);
 
 onMounted(async () => {
   try {
@@ -62,12 +67,9 @@ onMounted(async () => {
   <div class="app-shell">
     <aside class="sidebar">
       <div class="brand">
-        <div class="brand-mark" aria-hidden="true">
-          <HeartPulse :size="24" :stroke-width="2.2" />
-        </div>
-        <div>
+        <ClinicalBrandMark :size="54" />
+        <div class="brand-copy">
           <strong>运动功能评估</strong>
-          <span>Multimodal Clinical Lab</span>
         </div>
       </div>
 
@@ -77,8 +79,11 @@ onMounted(async () => {
           :key="item.to"
           :to="item.to"
           class="nav-item"
+          :title="item.description"
         >
-          <component :is="item.icon" :size="20" />
+          <span class="nav-icon" aria-hidden="true">
+            <component :is="item.icon" :size="21" :stroke-width="1.8" />
+          </span>
           <span>
             <strong>{{ item.label }}</strong>
             <small>{{ item.description }}</small>
@@ -94,27 +99,22 @@ onMounted(async () => {
             aria-hidden="true"
           />
           <span>
-            <strong>{{ backendOnline ? "分析服务已连接" : "分析服务未连接" }}</strong>
-            <small>本地服务 · 127.0.0.1</small>
+            <strong>{{ backendOnline ? "服务在线" : "服务离线" }}</strong>
           </span>
         </div>
-        <div class="version-label">FRAMEWORK · v0.1.0</div>
       </div>
     </aside>
 
     <main class="main-area">
       <header class="topbar">
-        <div>
-          <p class="eyebrow">多模态临床评估工作台</p>
+        <div class="topbar-copy">
           <h1>{{ pageTitle }}</h1>
-          <p>{{ pageSubtitle }}</p>
         </div>
         <div class="topbar-meta">
           <div class="privacy-badge">
-            <span class="privacy-icon">本地</span>
+            <span class="privacy-icon"><ShieldCheck :size="18" /></span>
             <span>
-              <strong>数据保存在本机</strong>
-              <small>当前未连接外部数据库</small>
+              <strong>数据仅保存在本机</strong>
             </span>
           </div>
         </div>

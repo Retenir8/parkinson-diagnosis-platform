@@ -29,6 +29,15 @@ const router = createRouter({
           },
         },
         {
+          path: "video-segmentation",
+          name: "video-segmentation",
+          component: () => import("@/views/VideoSegmentationView.vue"),
+          meta: {
+            title: "视频分割",
+            subtitle: "人工查看视频并标记模型任务时间段",
+          },
+        },
+        {
           path: "reports",
           name: "reports",
           component: () => import("@/views/ReportsView.vue"),

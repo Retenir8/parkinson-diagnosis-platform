@@ -9,6 +9,7 @@ from app.api.routes import (
     modules,
     patients,
     reports,
+    segmentation,
 )
 
 
@@ -19,3 +20,4 @@ api_router.include_router(artifacts.router)
 api_router.include_router(modules.router)
 api_router.include_router(assessments.router)
 api_router.include_router(reports.router)
+api_router.include_router(segmentation.router)

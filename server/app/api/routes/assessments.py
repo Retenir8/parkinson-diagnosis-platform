@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import logging
+import mimetypes
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi.responses import FileResponse
 
 from app.api.dependencies import (
     get_artifact_repository,
@@ -49,16 +51,6 @@ def _run_inference_background(
         try:
             module = registry.get(module_id)
 
-            # Mark as running
-            assessment = repo.get(assessment_id)
-            run = assessment.module_runs[module_id]
-            run.status = "running"
-            run.status_detail = "推理中…"
-            run.updated_at = datetime.now(timezone.utc)
-            assessment.status = "running"
-            assessment.status_detail = f"正在执行 {module_id} 推理…"
-            repo.save(assessment)
-
             # Build InferenceRequest
             artifact_repo = ArtifactRepository(data_dir)
             inputs: dict[str, tuple[InputArtifact, ...]] = {}
@@ -81,45 +73,74 @@ def _run_inference_background(
                 patient_id=patient_id,
                 module_id=module_id,
                 inputs=inputs,
-                parameters={},
+                parameters={
+                    "output_dir": str(
+                        data_dir
+                        / "patients"
+                        / patient_id
+                        / "assessments"
+                        / assessment_id
+                        / "outputs"
+                        / module_id
+                    )
+                },
             )
 
             issues = module.validate(request)
             if issues:
-                assessment = repo.get(assessment_id)
-                run = assessment.module_runs[module_id]
-                run.status = "failed"
-                run.status_detail = "; ".join(issues)
-                run.updated_at = datetime.now(timezone.utc)
-                repo.save(assessment)
+                repo.store_module_failure(
+                    assessment_id,
+                    module_id,
+                    "; ".join(issues),
+                    merge=False,
+                )
                 logger.warning("Module %s validation failed: %s", module_id, issues)
                 return
 
             result = module.infer(request)
-            repo.store_module_result(assessment_id, module_id, result)
+            repo.store_module_result(
+                assessment_id,
+                module_id,
+                result,
+                merge=False,
+            )
             logger.info("Module %s inference completed", module_id)
 
         except Exception as exc:
             logger.exception("Module %s inference failed", module_id)
             try:
-                assessment = repo.get(assessment_id)
-                run = assessment.module_runs[module_id]
-                run.status = "failed"
-                run.status_detail = f"推理异常: {exc}"
-                run.updated_at = datetime.now(timezone.utc)
-                repo.save(assessment)
+                repo.store_module_failure(
+                    assessment_id,
+                    module_id,
+                    f"推理异常: {exc}",
+                    merge=False,
+                )
             except Exception:
-                pass
+                logger.exception(
+                    "Module %s failure state could not be stored",
+                    module_id,
+                )
 
     threads: list[threading.Thread] = []
     for module_id, slots in module_inputs.items():
         t = threading.Thread(
             target=_run_one,
             args=(module_id, slots),
-            daemon=True,
+            name=f"inference-{assessment_id}-{module_id}",
         )
         t.start()
         threads.append(t)
+
+    for thread in threads:
+        thread.join()
+
+    try:
+        repo.merge_module_runs(assessment_id, list(module_inputs))
+    except Exception:
+        logger.exception(
+            "Could not merge module results for assessment %s",
+            assessment_id,
+        )
 
 
 # ============================================================================
@@ -146,6 +167,56 @@ def get_assessment(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="未找到评估任务。",
         ) from error
+
+
+@router.get(
+    "/{assessment_id}/modules/{module_id}/outputs/{artifact_index}",
+    response_class=FileResponse,
+)
+def get_module_output(
+    assessment_id: str,
+    module_id: str,
+    artifact_index: int,
+    repository: AssessmentRepository = Depends(get_assessment_repository),
+) -> FileResponse:
+    """Read one exact output declared by a completed module result.
+
+    The client never supplies a filesystem path.  Only paths already stored in
+    ``ModuleResult.output_artifacts`` can be served.
+    """
+
+    try:
+        assessment = repository.get(assessment_id)
+    except KeyError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="未找到评估任务。",
+        ) from error
+
+    run = assessment.module_runs.get(module_id)
+    if run is None or run.result is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="该模块尚无可读取输出。",
+        )
+    if artifact_index < 0 or artifact_index >= len(run.result.output_artifacts):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="输出文件索引不存在。",
+        )
+
+    path = Path(run.result.output_artifacts[artifact_index]).resolve()
+    if not path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="输出文件不存在或已被移动。",
+        )
+    media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    return FileResponse(
+        path,
+        media_type=media_type,
+        headers={"Content-Disposition": f'inline; filename="{path.name}"'},
+    )
 
 
 @router.post(
@@ -277,7 +348,7 @@ def create_assessment(
         normalized,
         status_detail=(
             "各模块输入已分别登记并建立固定映射。"
-            "点击「执行推理」开始分析。"
+            "可由客户端立即启动推理。"
         ),
         module_runs=module_runs,
     )
@@ -325,7 +396,8 @@ def run_assessment(
         mid: assessment.module_runs[mid].inputs
         for mid in queued
     }
-    _run_inference_background(
+    background_tasks.add_task(
+        _run_inference_background,
         assessment_id=assessment.id,
         patient_id=assessment.patient_id,
         module_inputs=module_inputs,

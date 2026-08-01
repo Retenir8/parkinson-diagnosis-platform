@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import {
+  BarChart3,
   Braces,
   CheckCircle2,
   ChevronRight,
   CircleAlert,
   FileInput,
-  FileOutput,
   FolderOpen,
   Link2,
   Play,
@@ -17,7 +17,7 @@ import {
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useRoute } from "vue-router";
 
-import EmptyState from "@/components/EmptyState.vue";
+import AssessmentModuleResult from "@/components/AssessmentModuleResult.vue";
 import StatusPill from "@/components/StatusPill.vue";
 import { api, uploadPatientArtifact } from "@/services/api";
 import { usePatientsStore } from "@/stores/patients";
@@ -69,6 +69,20 @@ const canCreate = computed(
     sources.value.length > 0 &&
     !running.value,
 );
+
+const compactSlotLabels: Record<string, string> = {
+  analysis_source: "步行视频",
+  walk_source: "步行视频",
+  segment_manifest: "分段文件",
+  hand_video: "手部视频",
+  toe_tapping_video: "脚趾拍地视频",
+  leg_agility_video: "抬腿视频",
+  insole_data: "鞋垫数据",
+};
+
+function compactSlotLabel(slot: InputSlotDescriptor) {
+  return compactSlotLabels[slot.key] ?? slot.label;
+}
 
 function sourceKind(name: string): InputKind {
   const extension = name.split(".").pop()?.toLowerCase();
@@ -226,22 +240,6 @@ function moduleName(moduleId: string) {
   );
 }
 
-function hasResultValues(value: Record<string, unknown>) {
-  return Object.keys(value).length > 0;
-}
-
-const TASK_LABELS: Record<string, string> = {
-  finger_opposition: "手指对指",
-  hand_alternation: "手掌轮替",
-  fist_clenching: "握拳",
-  toe_tapping: "脚趾拍地",
-  leg_agility: "抬腿灵活性",
-};
-
-function taskLabel(taskName: string) {
-  return TASK_LABELS[taskName] ?? taskName;
-}
-
 // ---- auto-polling ----
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -339,6 +337,14 @@ async function createAssessment() {
       patient_id: selectedPatient.value.id,
       module_inputs: moduleInputs,
     });
+    if (
+      Object.values(assessment.value.module_runs).some(
+        (run) => run.status === "queued",
+      )
+    ) {
+      assessment.value = await api.runAssessment(assessment.value.id);
+      startPolling();
+    }
   } catch (error) {
     actionError.value =
       error instanceof Error ? error.message : "评估任务创建失败。";
@@ -391,23 +397,20 @@ onMounted(async () => {
         <span>1</span>
         <div>
           <strong>选择患者</strong>
-          <small>关联患者档案</small>
         </div>
       </div>
       <ChevronRight :size="18" />
       <div class="workflow-step" :class="{ active: sources.length }">
         <span>2</span>
         <div>
-          <strong>模块输入</strong>
-          <small>明确资料与模型对应</small>
+          <strong>上传资料</strong>
         </div>
       </div>
       <ChevronRight :size="18" />
       <div class="workflow-step" :class="{ active: assessment }">
         <span>3</span>
         <div>
-          <strong>模型输出</strong>
-          <small>仅显示真实返回结果</small>
+          <strong>查看结果</strong>
         </div>
       </div>
     </section>
@@ -420,15 +423,13 @@ onMounted(async () => {
     <section class="content-card setup-card">
       <header class="card-header">
         <div>
-          <span class="section-kicker">01 · Patient Context</span>
-          <h2>本次评估对象</h2>
+          <h2>选择患者</h2>
         </div>
       </header>
       <div class="patient-select-row">
         <div class="patient-select-icon"><UserRound :size="22" /></div>
         <label class="field grow">
-          <span>患者</span>
-          <select v-model="patients.selectedId">
+          <select v-model="patients.selectedId" aria-label="选择患者">
             <option :value="null">请选择已建档患者</option>
             <option
               v-for="patient in patients.items"
@@ -450,14 +451,10 @@ onMounted(async () => {
         <section class="content-card">
           <header class="card-header">
             <div>
-              <span class="section-kicker">02 · Module Input Mapping</span>
-              <h2>模型输入映射</h2>
-              <p>
-                每份资料在上传时固定绑定模块和输入槽，不会隐式传给其他模型
-              </p>
+              <h2>上传评估资料</h2>
             </div>
             <span class="count-badge">
-              {{ selectedModuleCount }} 模块 · {{ sources.length }} 份资料
+              {{ selectedModuleCount }} 模块 · {{ sources.length }} 文件
             </span>
           </header>
 
@@ -474,7 +471,6 @@ onMounted(async () => {
                   }}</span>
                   <div>
                     <h3>{{ module.display_name }}</h3>
-                    <p>{{ module.description }}</p>
                   </div>
                 </div>
                 <StatusPill :status="module.status" />
@@ -487,15 +483,10 @@ onMounted(async () => {
               >
                 <div class="input-slot-heading">
                   <div>
-                    <strong>{{ slot.label }}</strong>
-                    <span class="interface-key"
-                      >{{ module.id }} / {{ slot.key }}</span
-                    >
+                    <strong>{{ compactSlotLabel(slot) }}</strong>
                   </div>
                   <span>{{ slot.required ? "必需" : "可选" }}</span>
                 </div>
-                <p>{{ slot.description }}</p>
-
                 <div
                   class="module-dropzone"
                   role="button"
@@ -507,11 +498,7 @@ onMounted(async () => {
                 >
                   <Upload :size="20" />
                   <div>
-                    <strong>添加{{ slot.label }}</strong>
-                    <span>
-                      允许：
-                      {{ slot.accepted_kinds.join("、") }}
-                    </span>
+                    <strong>添加{{ compactSlotLabel(slot) }}</strong>
                   </div>
                   <button
                     class="button small secondary"
@@ -570,10 +557,7 @@ onMounted(async () => {
           <div>
             <Link2 :size="20" />
             <span>
-              <strong>建立输入—模型固定映射</strong>
-              <small>
-                只有已添加资料的模块会进入本次评估，不产生可视化或模拟分数
-              </small>
+              <strong>准备完成后开始分析</strong>
             </span>
           </div>
           <button
@@ -583,222 +567,109 @@ onMounted(async () => {
             @click="createAssessment"
           >
             <Play :size="17" fill="currentColor" />
-            {{ running ? "正在登记输入…" : "创建评估任务" }}
+            {{ running ? "正在启动分析…" : "开始分析" }}
           </button>
         </div>
       </div>
 
-      <aside class="result-column">
-        <section class="content-card result-hub">
-          <header class="card-header">
+    </div>
+
+    <section v-if="assessment" class="content-card analysis-workspace">
+      <header class="card-header analysis-workspace-heading">
+        <div>
+          <h2>分析结果</h2>
+        </div>
+        <div class="analysis-heading-actions">
+          <StatusPill :status="assessment.status" />
+          <button
+            class="button small secondary"
+            type="button"
+            :disabled="refreshingResult"
+            @click="refreshResults"
+          >
+            <RefreshCw :size="15" :class="{ spinning: refreshingResult }" />
+            刷新结果
+          </button>
+        </div>
+      </header>
+
+      <div class="assessment-record analysis-record">
+        <CheckCircle2 :size="20" />
+        <div>
+          <strong>{{ assessment.status_detail }}</strong>
+        </div>
+      </div>
+
+      <div class="module-visualization-list">
+        <article
+          v-for="run in assessment.module_runs"
+          :key="run.module_id"
+          class="module-visualization-card"
+        >
+          <header>
             <div>
-              <span class="section-kicker">03 · Model Outputs</span>
-              <h2>模型输出结果</h2>
-              <p>只读取模块真实返回值，前端可视化接口当前关闭</p>
+              <span class="analysis-module-icon"><BarChart3 :size="19" /></span>
+              <div>
+                <h3>{{ moduleName(run.module_id) }}</h3>
+                <p v-if="run.result?.summary">{{ run.result.summary }}</p>
+                <p v-else>{{ run.status_detail }}</p>
+              </div>
             </div>
-            <button
-              v-if="assessment"
-              class="button small secondary"
-              type="button"
-              :disabled="refreshingResult"
-              @click="refreshResults"
-            >
-              <RefreshCw
-                :size="15"
-                :class="{ spinning: refreshingResult }"
-              />
-              刷新结果
-            </button>
-            <FileOutput v-else :size="21" />
+            <StatusPill :status="run.status" />
           </header>
 
-          <EmptyState
-            v-if="!assessment"
-            title="等待评估任务"
-            description="完成患者选择和模块输入映射后，这里将按模块展示输出。"
-          >
-            <template #icon>
-              <Braces :size="24" />
-            </template>
-          </EmptyState>
-
-          <div v-else class="result-content">
-            <div class="assessment-record">
-              <CheckCircle2 :size="20" />
-              <div>
-                <strong>输入映射已保存</strong>
-                <p>{{ assessment.status_detail }}</p>
-                <span>{{ assessment.id }}</span>
-              </div>
-            </div>
-
-            <article
-              v-for="run in assessment.module_runs"
-              :key="run.module_id"
-              class="module-result-card"
-            >
-              <header>
-                <div>
-                  <h3>{{ moduleName(run.module_id) }}</h3>
-                  <span>
-                    {{
-                      Object.values(run.inputs).reduce(
-                        (count, ids) => count + ids.length,
-                        0,
-                      )
-                    }}
-                    份对应输入
-                  </span>
-                </div>
-                <StatusPill :status="run.status" />
-              </header>
-
-              <!-- Structured task results (hand / leg modules) -->
-              <div
-                v-if="run.result && run.result.result_data && run.result.result_data.tasks"
-                class="task-results"
-              >
-                <p v-if="run.result.summary" class="result-summary">
-                  {{ run.result.summary }}
-                </p>
-                <table class="score-table">
-                  <thead>
-                    <tr>
-                      <th>任务</th>
-                      <th>左侧</th>
-                      <th>右侧</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr
-                      v-for="(taskResult, taskName) in run.result.result_data.tasks"
-                      :key="taskName"
-                    >
-                      <td class="task-label">{{ taskLabel(taskName) }}</td>
-                      <td
-                        v-for="side in ['left', 'right']"
-                        :key="side"
-                        :class="[
-                          'score-cell',
-                          taskResult[side]?.status === 'INCOMPLETE'
-                            ? 'incomplete'
-                            : 'complete',
-                        ]"
-                      >
-                        <span class="score-value">
-                          {{ taskResult[side]?.score ?? "—" }}
-                        </span>
-                        <span class="score-count">
-                          {{ taskResult[side]?.detected_actions ?? 0 }}次
-                        </span>
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-
-                <!-- Flat metrics for reference -->
-                <details class="metrics-details">
-                  <summary>详细指标</summary>
-                  <dl>
-                    <div
-                      v-for="(value, key) in run.result.metrics"
-                      :key="key"
-                    >
-                      <dt>{{ key }}</dt>
-                      <dd>{{ value ?? "—" }}</dd>
-                    </div>
-                  </dl>
-                </details>
-
-                <ul v-if="run.result.warnings.length" class="result-warnings">
-                  <li v-for="warning in run.result.warnings" :key="warning">
-                    <CircleAlert :size="14" />
-                    {{ warning }}
-                  </li>
-                </ul>
-              </div>
-
-              <!-- Generic result (non-task-structured modules) -->
-              <div v-else-if="run.result" class="result-values">
-                <p v-if="run.result.summary" class="result-summary">
-                  {{ run.result.summary }}
-                </p>
-                <div
-                  v-if="hasResultValues(run.result.scores)"
-                  class="result-section"
-                >
-                  <strong>评分输出</strong>
-                  <dl>
-                    <div
-                      v-for="(value, key) in run.result.scores"
-                      :key="key"
-                    >
-                      <dt>{{ key }}</dt>
-                      <dd>{{ value ?? "—" }}</dd>
-                    </div>
-                  </dl>
-                </div>
-                <div
-                  v-if="hasResultValues(run.result.result_data)"
-                  class="result-section"
-                >
-                  <strong>结构化结果</strong>
-                  <pre>{{
-                    JSON.stringify(run.result.result_data, null, 2)
-                  }}</pre>
-                </div>
-                <ul v-if="run.result.warnings.length" class="result-warnings">
-                  <li v-for="warning in run.result.warnings" :key="warning">
-                    <CircleAlert :size="14" />
-                    {{ warning }}
-                  </li>
-                </ul>
-              </div>
-
-              <div v-else class="result-pending">
-                <Braces :size="19" />
-                <div>
-                  <strong>尚无模型输出</strong>
-                  <p>{{ run.status_detail }}</p>
-                </div>
-              </div>
-            </article>
-
-            <!-- Run button if any modules are queued -->
-            <div
-              v-if="Object.values(assessment.module_runs).some((r) => r.status === 'queued')"
-              class="assessment-submit-bar"
-            >
-              <div>
-                <Play :size="20" />
-                <span>
-                  <strong>模块就绪，等待执行</strong>
-                  <small>点击按钮启动所有已排队模块的推理</small>
-                </span>
-              </div>
-              <button
-                class="button primary prominent"
-                type="button"
-                :disabled="running"
-                @click="runInference"
-              >
-                <Play :size="17" fill="currentColor" />
-                {{ running ? "推理中…" : "执行推理" }}
-              </button>
-            </div>
-
-            <!-- Auto-refresh hint when running -->
-            <div
-              v-if="Object.values(assessment.module_runs).some((r) => r.status === 'running')"
-              class="inline-alert info"
-            >
-              <RefreshCw :size="16" class="spinning" />
-              推理进行中，页面每 3 秒自动刷新…
+          <AssessmentModuleResult
+            v-if="run.result"
+            :assessment-id="assessment.id"
+            :module-id="run.module_id"
+            :result="run.result"
+          />
+          <div v-else class="module-analysis-pending">
+            <RefreshCw
+              v-if="run.status === 'running'"
+              :size="21"
+              class="spinning"
+            />
+            <Braces v-else :size="21" />
+            <div>
+              <strong>
+                {{ run.status === "running" ? "正在执行模型推理" : "等待模块输出" }}
+              </strong>
+              <p>{{ run.status_detail }}</p>
             </div>
           </div>
-        </section>
-      </aside>
-    </div>
+        </article>
+      </div>
+
+      <div
+        v-if="Object.values(assessment.module_runs).some((run) => run.status === 'queued')"
+        class="assessment-submit-bar analysis-run-bar"
+      >
+        <div>
+          <Play :size="20" />
+          <span>
+            <strong>存在尚未启动的模块</strong>
+          </span>
+        </div>
+        <button
+          class="button primary prominent"
+          type="button"
+          :disabled="running"
+          @click="runInference"
+        >
+          <Play :size="17" fill="currentColor" />
+          {{ running ? "推理中…" : "继续分析" }}
+        </button>
+      </div>
+
+      <div
+        v-if="Object.values(assessment.module_runs).some((run) => run.status === 'running')"
+        class="inline-alert info analysis-running-hint"
+      >
+        <RefreshCw :size="16" class="spinning" />
+        推理进行中，结果将每 3 秒自动刷新；各模块完成后会分别展开。
+      </div>
+    </section>
 
     <input
       ref="fileInput"

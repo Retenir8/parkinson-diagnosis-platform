@@ -3,19 +3,27 @@
 1. 创建患者 → 上传手部/腿部 bag → 创建评估 → 触发推理
 
 使用方式：
-    cd E:/aiMDS/parkinson-diagnosis-platform/server
+    cd <project>/server
     python tests/test_e2e.py
 """
 
+import os
+from pathlib import Path
+
 import requests
-import json
-import time
 
 BASE = "http://127.0.0.1:8000/api/v1"
 
-HAND_BAG = r"E:\aiMDS\bag\20260421.bag"
-TOE_BAG  = r"E:\aiMDS\bag\20260603_113005_2.bag"
-LEG_BAG  = r"E:\aiMDS\bag\20260603_113005_3.bag"
+DATA_DIR = Path(
+    os.getenv(
+        "MEDVISION_DATA_DIR",
+        Path(__file__).resolve().parents[2] / "data",
+    )
+).resolve()
+SAMPLE_DIR = DATA_DIR / "samples"
+HAND_BAG = SAMPLE_DIR / "hand" / "hand_motion.bag"
+TOE_BAG = SAMPLE_DIR / "leg" / "toe_tapping.bag"
+LEG_BAG = SAMPLE_DIR / "leg" / "leg_agility.bag"
 
 
 def main():
@@ -32,7 +40,7 @@ def main():
 
     # ---- 2. 上传手部 bag ----
     print("[2/5] 上传手部视频...")
-    with open(HAND_BAG, "rb") as f:
+    with HAND_BAG.open("rb") as f:
         hand_resp = requests.post(
             f"{BASE}/patients/{pid}/artifacts/upload",
             data={
@@ -48,7 +56,7 @@ def main():
 
     # ---- 3. 上传腿部 bag（脚趾拍地） ----
     print("[3/5] 上传腿部视频（脚趾拍地）...")
-    with open(TOE_BAG, "rb") as f:
+    with TOE_BAG.open("rb") as f:
         toe_resp = requests.post(
             f"{BASE}/patients/{pid}/artifacts/upload",
             data={
@@ -64,7 +72,7 @@ def main():
 
     # ---- 4. 上传腿部 bag（抬腿） ----
     print("[3/5] 上传腿部视频（抬腿）...")
-    with open(LEG_BAG, "rb") as f:
+    with LEG_BAG.open("rb") as f:
         leg_resp = requests.post(
             f"{BASE}/patients/{pid}/artifacts/upload",
             data={

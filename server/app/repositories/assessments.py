@@ -76,6 +76,8 @@ class AssessmentRepository:
         assessment_id: str,
         module_id: str,
         result: ModuleResult,
+        *,
+        merge: bool = True,
     ) -> Assessment:
         assessment = self.get(assessment_id)
         if module_id not in assessment.module_runs:
@@ -93,18 +95,111 @@ class AssessmentRepository:
         run.result = result
         run.updated_at = datetime.now(timezone.utc)
         assessment.module_runs[module_id] = run
+        self.save_module_run(
+            assessment.patient_id,
+            assessment.id,
+            run,
+        )
 
-        if all(
-            item.status == "completed"
-            for item in assessment.module_runs.values()
-        ):
-            assessment.status = "completed"
-            assessment.status_detail = "所有已请求模块均已返回结果。"
-        else:
+        if merge:
+            return self.merge_module_runs(assessment_id, [module_id])
+        return assessment
+
+    def store_module_failure(
+        self,
+        assessment_id: str,
+        module_id: str,
+        status_detail: str,
+        *,
+        merge: bool = True,
+    ) -> Assessment:
+        assessment = self.get(assessment_id)
+        if module_id not in assessment.module_runs:
+            raise KeyError(
+                f"Module {module_id} is not part of assessment {assessment_id}"
+            )
+
+        run = assessment.module_runs[module_id]
+        run.status = "failed"
+        run.status_detail = status_detail
+        run.result = None
+        run.updated_at = datetime.now(timezone.utc)
+        assessment.module_runs[module_id] = run
+        self.save_module_run(
+            assessment.patient_id,
+            assessment.id,
+            run,
+        )
+
+        if merge:
+            return self.merge_module_runs(assessment_id, [module_id])
+        return assessment
+
+    def save_module_run(
+        self,
+        patient_id: str,
+        assessment_id: str,
+        run: ModuleRunRecord,
+    ) -> None:
+        """Persist one model run without touching the shared assessment JSON."""
+
+        self.store.write(
+            self._module_run_path(patient_id, assessment_id, run.module_id),
+            run.model_dump(mode="json"),
+        )
+
+    def merge_module_runs(
+        self,
+        assessment_id: str,
+        module_ids: list[str],
+    ) -> Assessment:
+        """Merge completed per-model JSON files into the assessment once."""
+
+        assessment = self.get(assessment_id)
+        for module_id in module_ids:
+            if module_id not in assessment.module_runs:
+                raise KeyError(
+                    f"Module {module_id} is not part of assessment {assessment_id}"
+                )
+            path = self._module_run_path(
+                assessment.patient_id,
+                assessment.id,
+                module_id,
+            )
+            run = ModuleRunRecord.model_validate(self.store.read(path))
+            if run.module_id != module_id:
+                raise ValueError(
+                    "Stored module run does not match the requested module"
+                )
+            assessment.module_runs[module_id] = run
+
+        all_runs = list(assessment.module_runs.values())
+        active_count = sum(
+            run.status in {"queued", "running"} for run in all_runs
+        )
+        failed_count = sum(run.status == "failed" for run in all_runs)
+        completed_count = sum(run.status == "completed" for run in all_runs)
+        if active_count:
             assessment.status = "running"
             assessment.status_detail = (
-                f"已收到 {module_id} 的结果，其他模块仍在等待。"
+                f"已收到 {completed_count} 个模块结果，"
+                f"仍有 {active_count} 个模块等待完成。"
             )
+        elif failed_count:
+            assessment.status = "failed"
+            assessment.status_detail = (
+                f"本次推理完成：{completed_count} 个模块成功，"
+                f"{failed_count} 个模块失败。"
+            )
+        elif completed_count:
+            assessment.status = "completed"
+            assessment.status_detail = (
+                f"本次推理的 {completed_count} 个模块均已返回结果。"
+            )
+        else:
+            assessment.status = "running"
+            assessment.status_detail = "模型结果尚未全部写入。"
+
         self.save(assessment)
         return assessment
 
@@ -115,4 +210,19 @@ class AssessmentRepository:
             / "assessments"
             / assessment_id
             / "assessment.json"
+        )
+
+    def _module_run_path(
+        self,
+        patient_id: str,
+        assessment_id: str,
+        module_id: str,
+    ) -> Path:
+        return (
+            self.root
+            / patient_id
+            / "assessments"
+            / assessment_id
+            / "module_runs"
+            / f"{module_id}.json"
         )

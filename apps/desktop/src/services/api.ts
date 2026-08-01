@@ -5,7 +5,10 @@ import type {
   ModelModuleDescriptor,
   Patient,
   PatientCreate,
+  ReportDetail,
   ReportSummary,
+  SegmentationProject,
+  VideoSegment,
 } from "@/types/domain";
 
 const API_BASE =
@@ -118,7 +121,87 @@ export const api = {
     request<ReportSummary[]>(
       `/reports${patientId ? `?patient_id=${patientId}` : ""}`,
     ),
+
+  getReport: (reportId: string) =>
+    request<ReportDetail>(`/reports/${reportId}`),
+
+  listSegmentationProjects: (keyword = "") =>
+    request<SegmentationProject[]>(
+      `/segmentation-projects${
+        keyword ? `?keyword=${encodeURIComponent(keyword)}` : ""
+      }`,
+    ),
+
+  getSegmentationProject: (projectId: string) =>
+    request<SegmentationProject>(`/segmentation-projects/${projectId}`),
+
+  saveVideoSegments: (
+    projectId: string,
+    segments: VideoSegment[],
+    walkDistanceM?: number,
+  ) =>
+    request<SegmentationProject>(
+      `/segmentation-projects/${projectId}/segments`,
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          segments,
+          walk_distance_m: walkDistanceM,
+        }),
+      },
+    ),
 };
+
+export function assessmentOutputUrl(
+  assessmentId: string,
+  moduleId: string,
+  artifactIndex: number,
+): string {
+  return `${API_BASE}/assessments/${encodeURIComponent(
+    assessmentId,
+  )}/modules/${encodeURIComponent(moduleId)}/outputs/${artifactIndex}`;
+}
+
+export function segmentationPreviewUrl(project: SegmentationProject): string {
+  return `${API_BASE}/segmentation-projects/${project.id}/preview?v=${encodeURIComponent(
+    project.updated_at,
+  )}`;
+}
+
+export function uploadSegmentationProject(
+  file: File,
+  projectName: string,
+  onProgress?: (value: number) => void,
+): Promise<SegmentationProject> {
+  return new Promise((resolve, reject) => {
+    const body = new FormData();
+    body.append("file", file);
+    body.append("project_name", projectName);
+
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${API_BASE}/segmentation-projects/upload`);
+    xhr.responseType = "json";
+
+    xhr.upload.addEventListener("progress", (event) => {
+      if (event.lengthComputable && onProgress) {
+        onProgress(Math.round((event.loaded / event.total) * 100));
+      }
+    });
+    xhr.addEventListener("load", () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(xhr.response as SegmentationProject);
+        return;
+      }
+      reject(
+        new ApiError(`导入失败（${xhr.status}）`, xhr.status, xhr.response),
+      );
+    });
+    xhr.addEventListener("error", () => {
+      reject(new ApiError("无法连接分析服务", 0));
+    });
+    xhr.send(body);
+  });
+}
 
 export function uploadPatientArtifact(
   patientId: string,

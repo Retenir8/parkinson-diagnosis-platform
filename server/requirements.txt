@@ -4,8 +4,15 @@ python-multipart>=0.0.20,<1
 pydantic>=2.11,<3
 
 # 手部/腿部运动分析模块依赖
-numpy>=1.24
-opencv-python>=4.8
-mediapipe>=0.10.0
+numpy>=1.24,<2
+opencv-contrib-python>=4.8,<5
+# 当前实现使用 Legacy Solutions API（mp.solutions）；0.10.30 起已移除。
+mediapipe==0.10.21
+
+# 整体姿态 walk17 三分类模型（artifact 使用 scikit-learn 1.8.0 生成）
+scikit-learn==1.8.0
+joblib>=1.5,<2
+pandas>=2.2,<4
+openpyxl>=3.1,<4
 # pyrealsense2 — 需从 Intel 源单独安装：
 #   pip install pyrealsense2

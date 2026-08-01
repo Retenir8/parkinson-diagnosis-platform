@@ -42,6 +42,7 @@ def get_settings() -> Settings:
     data_dir = _resolve_data_dir()
     data_dir.mkdir(parents=True, exist_ok=True)
     (data_dir / "patients").mkdir(parents=True, exist_ok=True)
+    (data_dir / "video_segments").mkdir(parents=True, exist_ok=True)
     return Settings(
         app_name="Multimodal Clinical Assessment Service",
         version="0.1.0",

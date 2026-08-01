@@ -52,7 +52,6 @@ onMounted(refresh);
         <div class="settings-icon"><ServerCog :size="21" /></div>
         <div>
           <h2>分析服务</h2>
-          <p>浏览器和 Tauri 共用同一套本地 API</p>
         </div>
         <button
           class="button secondary small"
@@ -69,9 +68,7 @@ onMounted(refresh);
         <CheckCircle2 :size="23" />
         <div>
           <strong>本地分析服务运行正常</strong>
-          <span>{{ health.service }} · {{ health.version }}</span>
         </div>
-        <span class="health-state">CONNECTED</span>
       </div>
       <div v-else class="health-panel error">
         <CircleAlert :size="23" />
@@ -79,7 +76,6 @@ onMounted(refresh);
           <strong>本地分析服务未连接</strong>
           <span>{{ connectionError || "请先启动 Python 服务" }}</span>
         </div>
-        <span class="health-state">OFFLINE</span>
       </div>
     </section>
 
@@ -88,7 +84,6 @@ onMounted(refresh);
         <div class="settings-icon"><HardDrive :size="21" /></div>
         <div>
           <h2>数据与隐私</h2>
-          <p>首版使用本地文件，不连接数据库</p>
         </div>
       </header>
       <div class="settings-cards">
@@ -97,7 +92,6 @@ onMounted(refresh);
           <div>
             <span>存储模式</span>
             <strong>本地 JSON 与原始文件</strong>
-            <small>患者之间采用独立目录隔离</small>
           </div>
         </article>
         <article class="setting-card wide">
@@ -107,7 +101,6 @@ onMounted(refresh);
             <strong class="path-value">{{
               health?.data_dir || "等待服务返回"
             }}</strong>
-            <small>可通过 MEDVISION_DATA_DIR 环境变量覆盖</small>
           </div>
         </article>
         <article class="setting-card">
@@ -115,7 +108,6 @@ onMounted(refresh);
           <div>
             <span>外部连接</span>
             <strong>未配置</strong>
-            <small>未接入数据库或云端服务</small>
           </div>
         </article>
       </div>
@@ -126,7 +118,6 @@ onMounted(refresh);
         <div class="settings-icon"><FolderCog :size="21" /></div>
         <div>
           <h2>模型模块状态</h2>
-          <p>状态来自后端模块注册表，不代表临床有效性</p>
         </div>
       </header>
       <div class="module-grid settings-modules">

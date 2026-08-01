@@ -1,0 +1,48 @@
+{
+  "module_id": "overall-posture",
+  "model_file": "three_class_walk17_classifier.pkl",
+  "model_sha256": "630E261761A761F4B3362C2564EBCC9AA50E0883CE3A2FCAE5389F833FB63AE7",
+  "pose_model_file": "pose_landmarker_full.task",
+  "pose_model_sha256": "4EAA5EB7A98365221087693FCC286334CF0858E2EB6E15B506AA4A7ECDCEC4AD",
+  "trained_with_scikit_learn": "1.8.0",
+  "prediction_mode": "three_class_raw",
+  "classes": [0, 1, 2],
+  "feature_mode": "walk17",
+  "features": [
+    "SP_U",
+    "RA_AMP_U",
+    "LA_AMP_U",
+    "RA_STD_U",
+    "LA_STD_U",
+    "SYM_U",
+    "R_JERK_U",
+    "L_JERK_U",
+    "ASA_U",
+    "ASYM_IND_U",
+    "TRA_U",
+    "T_AMP_U",
+    "STR_T_U",
+    "STR_CV_U",
+    "STEP_REG_U",
+    "STEP_SYM_U",
+    "JERK_T_U"
+  ],
+  "selected_features": [
+    "SP_U",
+    "RA_AMP_U",
+    "LA_AMP_U",
+    "RA_STD_U",
+    "LA_STD_U",
+    "ASA_U",
+    "ASYM_IND_U",
+    "STR_T_U"
+  ],
+  "ppmi_holdout_balanced_accuracy": 0.78125,
+  "ppmi_holdout_macro_f1": 0.7841694537346712,
+  "mediapipe_external_raw_accuracy": 0.10714285714285714,
+  "notes": [
+    "PPMI holdout class 2 has only one sample.",
+    "The current MediaPipe external cohort has seven patients and no normal controls.",
+    "The output is experimental and is not an independently validated clinical diagnosis."
+  ]
+}

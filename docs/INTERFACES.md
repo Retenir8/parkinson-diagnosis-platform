@@ -56,9 +56,11 @@ class InferenceModule:
 
 | 模块 | module_id | input_slot | 当前允许类型 |
 |---|---|---|---|
-| 整体姿态 | `overall-posture` | `analysis_source` | video / realsense_bag / tabular |
+| 整体姿态 | `overall-posture` | `walk_source` | realsense_bag |
+| 整体姿态 | `overall-posture` | `segment_manifest` | tabular (CSV / JSON) |
 | 手部 | `hand-motion` | `hand_video` | video |
-| 腿部 | `leg-motion` | `leg_video` | video |
+| 腿部 | `leg-motion` | `toe_tapping_video` | video / realsense_bag |
+| 腿部 | `leg-motion` | `leg_agility_video` | video / realsense_bag |
 | 智能鞋垫 | `smart-insole` | `insole_data` | insole_timeseries / tabular |
 
 这些槽位只定义路由关系，不定义动作、视角、文件内部结构或模型预处理。负责人接入时可以增加、删除或修改自己的输入槽。
@@ -94,7 +96,15 @@ class InferenceModule:
 
 不要求所有模块共享相同分数，也不默认对模块分数相加或平均。
 
-评估中的 `module_runs[module_id].inputs[input_slot]` 只引用该模块对应输入槽的资料，并保存该模块的 `ModuleResult`。采集评估页当前只展示这些真实返回字段，不读取或生成任何可视化配置。详细可视化协议将在模型输入输出稳定后另行设计并版本化。
+评估中的 `module_runs[module_id].inputs[input_slot]` 只引用该模块对应输入槽的资料，并保存该模块的 `ModuleResult`。采集评估页按模块展开真实返回值：整体姿态使用专用骨架视频与 17 特征面板，手部/腿部使用任务×左右侧指标面板，未知模块降级为通用指标卡，不推测未返回的字段。
+
+模块输出文件通过受限只读接口访问，客户端不能传入任意本地路径：
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| `GET` | `/api/v1/assessments/{assessment_id}/modules/{module_id}/outputs/{artifact_index}` | 读取该模块 `output_artifacts` 中的一个已登记文件 |
+
+整体姿态的 `result_data.visualization.annotated_videos[]` 记录 `segment_id`、`artifact_index`、`media_type` 和视频内叠加的指标名。当前输出 VP8/WebM，视频画面包含骨架、帧号、时间、姿态检测状态和有效深度比例。
 
 推理编排器获得模型返回值后，调用：
 
@@ -103,23 +113,70 @@ AssessmentRepository.store_module_result(
     assessment_id="<assessment_uuid>",
     module_id="hand-motion",
     result=module_result,
+    merge=False,
 )
 ```
 
-仓库会再次校验 `ModuleResult.module_id` 与目标模块一致，再把结果写入对应 `module_runs`；不会写入其他模块。
+仓库会再次校验 `ModuleResult.module_id` 与目标模块一致，再把结果写入该评估目录下的 `module_runs/hand-motion.json`；不会写入其他模块。并行模块全部结束后，编排器只执行一次：
 
-## 各模块待确认事项
+```python
+AssessmentRepository.merge_module_runs(
+    assessment_id="<assessment_uuid>",
+    module_ids=["hand-motion", "leg-motion"],
+)
+```
+
+该步骤读取各模块独立 JSON，并一次性更新 `assessment.json`。因此模型线程之间不共享“读取—修改—写回”过程，避免后完成的模型覆盖先完成的结果。
+
+## 视频分割接口
+
+视频分割是模型推理前的独立人工标注流程，不会自动判断动作类型，也不会执行模型评分。
+
+主要接口：
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| `GET` | `/api/v1/segmentation-projects` | 列出或按名称、文件名、标签检索项目 |
+| `POST` | `/api/v1/segmentation-projects/upload` | 上传 `.bag` 或普通视频并创建归档 |
+| `GET` | `/api/v1/segmentation-projects/{id}` | 读取预览处理状态和已保存片段 |
+| `GET` | `/api/v1/segmentation-projects/{id}/preview` | 读取浏览器使用的 WebM 预览 |
+| `PUT` | `/api/v1/segmentation-projects/{id}/segments` | 校验并保存分段清单 |
+
+每个片段固定包含：
+
+```json
+{
+  "segment_id": "1",
+  "label": "walk_1",
+  "task_type": "walk",
+  "start_s": 10.25,
+  "end_s": 18.4
+}
+```
+
+约束：
+
+- `segment_id` 在同一项目内唯一；
+- `end_s > start_s >= 0`，且不能超过视频时长；
+- 当前界面拒绝时间重叠的片段；
+- 时间基准是原始文件第一帧，与 `analyze_bag_segments.py` 一致；
+- 页面提供 `walk`、`turn`、`stand`、`other` 和自定义 `task_type` 选择，但只负责写入字段，不赋予或假设模型评分含义；
+- 项目可选记录 `walk_distance_m`，该值写入 `segments.json` 供整体姿态 `SP_U` 计算使用；
+- 保存时同时生成 `segments.csv` 和 `segments.json`，与原始文件、预览文件、`project.json` 放在 `data/video_segments/<项目目录>/`。
+
+## 各模块接入状态与待确认事项
 
 ### 整体姿态
 
-已检测到现有 `np3gait_best_classifier.pkl` 和 RealSense/视频分析脚本，但应用适配仍需确认：
+已接入 walk17 原始三分类模型：
 
-1. 首版使用 `.bag`、普通视频、已提取 CSV，还是全部支持；
-2. 动作分段来自人工时间轴、外部 CSV 还是自动识别；
-3. `SP_U` 所需步行距离由谁输入；
-4. 单目视频和 RealSense 是否允许进入同一个分类器；
-5. 临床阈值与原始三分类结果在报告中如何呈现；
-6. 现有模型训练环境的精确依赖版本。
+1. `walk_source` 当前仅接受 RealSense `.bag`；
+2. `segment_manifest` 接受视频分割页保存的 CSV/JSON，只处理 `task_type=walk`；
+3. 提取器和分类器必须精确匹配 17 个特征及其顺序，缺失值交给模型 imputer，不补 0；
+4. 默认为原始 `0/1/2` 输出，不使用先前的临床 1/2 阈值；
+5. `walk_distance_m` 可由 JSON 顶层或模块参数提供；缺省时按现有协议使用 10.0 m 并输出警告；
+6. 多个 walk 片段按多数票得到患者级结果，平票时用平均概率决定。
+7. 每个 walk 片段生成浏览器/Tauri 可播放的骨架 WebM；路径仅保存在 `output_artifacts`，前端通过受限输出接口读取。
 
 ### 手部视频
 
@@ -153,17 +210,35 @@ AssessmentRepository.store_module_result(
 5. 压力图坐标映射；
 6. 评分、指标及与视频时间轴对齐方式。
 
-## 融合与报告待确认
+## 报告接口与分层边界
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| `GET` | `/api/v1/reports` | 从已有评估结果生成报告索引，可按患者筛选 |
+| `GET` | `/api/v1/reports/{assessment_id}` | 读取患者信息、分层结果和所有模块详细指标 |
+
+当前报告中的“帕金森健康 / 轻度 / 中重度”只做以下可追溯映射：
+
+```text
+overall-posture.scores.np3gait_class
+0 → 帕金森健康
+1 → 帕金森轻度
+2 → 帕金森中重度
+```
+
+置信度取该患者最终类别在各 walk 片段中的平均概率。该字段标记为 `research_only=true`，页面和报告都显示研究性声明。没有整体姿态结果时返回 `unavailable`，不会使用手部或腿部数据猜测分层。
+
+## 融合待确认
 
 以下内容没有实现：
 
 - 四类模块输出是独立子项、MDS-UPDRS 项目还是同一目标的多模型证据；
 - 综合评分公式、缺失模块处理、权重和阈值；
 - 患者多次评估的可比性规则；
-- 报告必需字段、签字/审核流程、模板和导出格式；
+- 报告签字/审核流程和正式 PDF/Word 模板；
 - 结果是研究辅助、临床辅助还是竞赛展示。
 
-确认前，前端只展示各模块真实返回的指标与状态，不生成综合分。
+确认前，前端只展示各模块真实返回的指标与状态，不生成跨模块综合分。浏览器打印可临时导出 PDF，但不等同于正式审核报告。
 
 ## 基础设施待确认
 

@@ -23,6 +23,7 @@ from app.modules.base import (
     ModuleUnavailableError,
     ProgressCallback,
 )
+from app.modules.mediapipe_compat import prepare_legacy_solutions
 from app.schemas.modules import (
     InputSlotDescriptor,
     InferenceRequest,
@@ -210,6 +211,7 @@ def _process_one_task(
     import pyrealsense2 as rs
     import mediapipe as mp
     import cv2
+    prepare_legacy_solutions()
 
     if not video_path.exists():
         raise ModuleUnavailableError(f"输入文件不存在：{video_path}")
@@ -549,8 +551,11 @@ class LegMotionModule(InferenceModule):
             issues.append("缺少 pyrealsense2 库。")
         try:
             import mediapipe  # noqa: F401
+            prepare_legacy_solutions()
         except ImportError:
             issues.append("缺少 mediapipe 库。")
+        except RuntimeError as error:
+            issues.append(str(error))
 
         return issues
 
