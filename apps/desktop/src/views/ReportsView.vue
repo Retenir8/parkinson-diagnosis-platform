@@ -8,6 +8,7 @@ import {
   Printer,
   Search,
   ShieldCheck,
+  Trash2,
   UserRound,
 } from "@lucide/vue";
 import { computed, onMounted, ref } from "vue";
@@ -81,6 +82,31 @@ async function loadReports() {
     error.value = caught instanceof Error ? caught.message : "报告列表读取失败。";
   } finally {
     loading.value = false;
+  }
+}
+
+const deletingReport = ref(false);
+async function deleteReport(report: ReportSummary) {
+  if (deletingReport.value) return;
+  if (
+    !window.confirm(
+      `确认删除报告“${report.patient_name} · ${formatDate(report.created_at)}”？\n将同时删除对应评估记录与全部推理产物，此操作不可恢复。`,
+    )
+  ) {
+    return;
+  }
+  deletingReport.value = true;
+  error.value = "";
+  try {
+    await api.deleteAssessment(report.id);
+    if (selectedReport.value?.id === report.id) {
+      selectedReport.value = null;
+    }
+    reports.value = reports.value.filter((item) => item.id !== report.id);
+  } catch (caught) {
+    error.value = caught instanceof Error ? caught.message : "删除报告失败。";
+  } finally {
+    deletingReport.value = false;
   }
 }
 
@@ -165,6 +191,15 @@ onMounted(async () => {
               :class="`severity-${report.severity?.code ?? 'unavailable'}`"
             >
               {{ report.severity?.label ?? "暂无法分层" }}
+            </span>
+            <span
+              class="report-index-delete"
+              role="button"
+              aria-label="删除报告"
+              title="删除报告（含评估记录与推理产物）"
+              @click.stop="deleteReport(report)"
+            >
+              <Trash2 :size="14" />
             </span>
           </button>
         </aside>

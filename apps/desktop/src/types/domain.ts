@@ -199,6 +199,7 @@ export interface SegmentationProject {
   height?: number | null;
   archive_path: string;
   walk_distance_m?: number | null;
+  crop_region?: [number, number, number, number] | null;
   segments: VideoSegment[];
   created_at: string;
   updated_at: string;

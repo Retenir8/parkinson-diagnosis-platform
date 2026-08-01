@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -11,6 +12,7 @@ from app.schemas.assessments import (
     ModuleRunRecord,
 )
 from app.schemas.modules import ModuleResult
+from app.services.dedup import unlink_ref
 
 
 class AssessmentRepository:
@@ -201,6 +203,68 @@ class AssessmentRepository:
             assessment.status_detail = "模型结果尚未全部写入。"
 
         self.save(assessment)
+        return assessment
+
+    def clear_outputs(self, assessment_id: str) -> Assessment:
+        """删除评估的推理产物（标注视频、CSV 等），保留评估记录与评分。
+
+        outputs 目录整体删除；各模块 result.output_artifacts 清空，
+        使输出端点在文件缺失时自然返回 404。
+        """
+        assessment = self.get(assessment_id)
+        outputs_dir = (
+            self.root
+            / assessment.patient_id
+            / "assessments"
+            / assessment.id
+            / "outputs"
+        )
+        cleared = outputs_dir.is_dir()
+        if cleared:
+            for path in outputs_dir.rglob("*"):
+                if path.is_file():
+                    unlink_ref(self.root.parent, path)
+            shutil.rmtree(outputs_dir, ignore_errors=True)
+
+        now = datetime.now(timezone.utc)
+        updated_runs: dict[str, ModuleRunRecord] = {}
+        for module_id, run in assessment.module_runs.items():
+            if run.result and run.result.output_artifacts:
+                new_result = run.result.model_copy(
+                    update={"output_artifacts": []}
+                )
+                run = run.model_copy(
+                    update={"result": new_result, "updated_at": now}
+                )
+            updated_runs[module_id] = run
+
+        update: dict = {"module_runs": updated_runs, "updated_at": now}
+        if cleared:
+            update["status_detail"] = (
+                "推理产物已清理；评估记录与评分保留。"
+            )
+        updated = assessment.model_copy(update=update)
+        self.save(updated)
+        return updated
+
+    def delete(self, assessment_id: str) -> Assessment:
+        """删除评估及其全部记录（报告 = 评估记录）。
+
+        评估目录（assessment.json、module_runs、outputs 产物）整体删除；
+        去重索引同步移除引用，其他硬链接不受影响。
+        """
+        assessment = self.get(assessment_id)
+        assessment_dir = (
+            self.root
+            / assessment.patient_id
+            / "assessments"
+            / assessment.id
+        )
+        if assessment_dir.is_dir():
+            for path in assessment_dir.rglob("*"):
+                if path.is_file():
+                    unlink_ref(self.root.parent, path)
+            shutil.rmtree(assessment_dir, ignore_errors=True)
         return assessment
 
     def _path(self, patient_id: str, assessment_id: str) -> Path:

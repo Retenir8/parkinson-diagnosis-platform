@@ -26,11 +26,40 @@ from app.schemas.assessments import (
     AssessmentCreate,
     ModuleRunRecord,
 )
+from app.schemas.artifacts import Artifact
 from app.schemas.modules import InferenceRequest, InputArtifact
 
 
 router = APIRouter(prefix="/assessments", tags=["assessments"])
 logger = logging.getLogger(__name__)
+
+
+def _local_reference_issue(artifact: Artifact) -> str | None:
+    """本地引用预检：路径必须可达且文件大小与归档时一致。
+
+    返回问题描述；无问题时返回 None。
+    """
+    if artifact.source_type != "local_reference":
+        return None
+    stored = Path(artifact.stored_path)
+    try:
+        if not stored.is_file():
+            return (
+                f"本地引用文件已被移动或删除：{artifact.original_name}"
+                f"（{stored}）"
+            )
+        if artifact.size_bytes is not None:
+            current = stored.stat().st_size
+            if current != artifact.size_bytes:
+                return (
+                    f"本地引用文件已变更：{artifact.original_name}"
+                    f"（归档时 {artifact.size_bytes} 字节，当前 {current} 字节）"
+                )
+    except OSError as error:
+        return (
+            f"本地引用文件无法读取：{artifact.original_name}（{error}）"
+        )
+    return None
 
 
 # ============================================================================
@@ -58,6 +87,16 @@ def _run_inference_background(
                 artifacts: list[InputArtifact] = []
                 for aid in artifact_ids:
                     a = artifact_repo.get(patient_id, aid)
+                    # 本地引用预检：文件被移动/删除/修改时给出明确错误
+                    issue = _local_reference_issue(a)
+                    if issue:
+                        repo.store_module_failure(
+                            assessment_id,
+                            module_id,
+                            f"输入文件不可用：{issue}",
+                            merge=False,
+                        )
+                        return
                     artifacts.append(InputArtifact(
                         id=a.id,
                         module_id=a.module_id,
@@ -217,6 +256,39 @@ def get_module_output(
         media_type=media_type,
         headers={"Content-Disposition": f'inline; filename="{path.name}"'},
     )
+
+
+@router.delete(
+    "/{assessment_id}/outputs",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def clear_assessment_outputs(
+    assessment_id: str,
+    repository: AssessmentRepository = Depends(get_assessment_repository),
+) -> None:
+    """删除该评估的全部推理产物（标注视频、CSV 等），保留评估记录与评分。"""
+    try:
+        repository.clear_outputs(assessment_id)
+    except KeyError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="未找到评估任务。",
+        ) from error
+
+
+@router.delete("/{assessment_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_assessment(
+    assessment_id: str,
+    repository: AssessmentRepository = Depends(get_assessment_repository),
+) -> None:
+    """删除评估（含报告与全部推理产物）。"""
+    try:
+        repository.delete(assessment_id)
+    except KeyError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="未找到评估任务。",
+        ) from error
 
 
 @router.post(

@@ -29,6 +29,8 @@ class VideoSegment(BaseModel):
 class VideoSegmentUpdate(BaseModel):
     segments: list[VideoSegment] = Field(default_factory=list)
     walk_distance_m: float | None = Field(default=None, gt=0)
+    # 手部动作分段：裁剪区域 (x, y, w, h)，作用于整段视频
+    crop_region: tuple[int, int, int, int] | None = None
 
     @model_validator(mode="after")
     def validate_segments(self) -> "VideoSegmentUpdate":
@@ -42,6 +44,10 @@ class VideoSegmentUpdate(BaseModel):
                 raise ValueError(
                     f"片段 {previous.segment_id} 与 {current.segment_id} 时间重叠"
                 )
+        if self.crop_region is not None:
+            x, y, w, h = self.crop_region
+            if min(x, y, w, h) < 0:
+                raise ValueError("crop_region 不允许负值")
         return self
 
 
@@ -61,6 +67,7 @@ class SegmentationProject(BaseModel):
     height: int | None = None
     archive_path: str
     walk_distance_m: float | None = None
+    crop_region: tuple[int, int, int, int] | None = None
     segments: list[VideoSegment] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime

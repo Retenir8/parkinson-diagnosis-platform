@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import os
 import re
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -13,6 +14,7 @@ from app.schemas.segmentation import (
     SegmentationSourceKind,
     VideoSegment,
 )
+from app.services.dedup import deduplicate, unlink_ref
 
 
 class SegmentationProjectNotFoundError(KeyError):
@@ -163,6 +165,7 @@ class SegmentationRepository:
         project_id: str,
         segments: list[VideoSegment],
         walk_distance_m: float | None = None,
+        crop_region: tuple[int, int, int, int] | None = None,
     ) -> SegmentationProject:
         project = self.get(project_id)
         ordered = sorted(segments, key=lambda item: item.start_s)
@@ -200,6 +203,7 @@ class SegmentationRepository:
             "source_file": project.source_file,
             "time_base": "seconds_from_first_frame",
             "walk_distance_m": walk_distance_m,
+            "crop_region": list(crop_region) if crop_region else None,
             "segments": [
                 {
                     **segment.model_dump(),
@@ -215,6 +219,7 @@ class SegmentationRepository:
             update={
                 "segments": ordered,
                 "walk_distance_m": walk_distance_m,
+                "crop_region": crop_region,
                 "status_detail": (
                     f"已保存 {len(ordered)} 个片段；CSV 与 JSON 已归档。"
                 ),
@@ -223,6 +228,25 @@ class SegmentationRepository:
         )
         self._write(updated)
         return updated
+
+    def delete(self, project_id: str) -> SegmentationProject:
+        """删除分割项目及其归档目录（原始文件、预览、CSV/JSON）。
+
+        归档内的文件若是去重硬链接，只移除索引引用并删链接；
+        其他硬链接引用的物理数据不受影响。
+        """
+        project = self.get(project_id)
+        project_dir = self._validated_archive_dir(project)
+        if project_dir.is_dir():
+            for path in project_dir.rglob("*"):
+                if path.is_file():
+                    unlink_ref(self.root.parent, path)
+            shutil.rmtree(project_dir, ignore_errors=True)
+        return project
+
+    def deduplicate(self, path: Path) -> Path:
+        """对归档内的新文件做内容寻址去重（同卷硬链接）。"""
+        return deduplicate(self.root.parent, path)
 
     def _write(self, project: SegmentationProject) -> None:
         path = self._validated_archive_dir(project) / "project.json"

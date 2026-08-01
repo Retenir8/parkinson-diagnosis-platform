@@ -43,7 +43,48 @@ const taskOptions: TaskOption[] = [
   { value: "turn", label: "转身 · turn" },
   { value: "stand", label: "站立 · stand" },
   { value: "other", label: "其他 · other" },
+  { value: "finger_opposition", label: "对指 · finger_opposition" },
+  { value: "hand_alternation", label: "轮替 · hand_alternation" },
+  { value: "fist_clenching", label: "握拳 · fist_clenching" },
 ];
+
+/** 手部动作任务：分段时使用裁剪区域而非步行距离 */
+const HAND_TASK_TYPES = new Set([
+  "finger_opposition",
+  "hand_alternation",
+  "fist_clenching",
+]);
+function isHandTask(taskType: string): boolean {
+  return HAND_TASK_TYPES.has(taskType.trim());
+}
+
+/** 手部裁剪区域默认值与手部模块 CROP_REGION 一致 */
+const DEFAULT_CROP_REGION = { x: 400, y: 100, w: 480, h: 480 };
+const cropRegion = ref({ ...DEFAULT_CROP_REGION });
+
+/** 当前标记任务是否为手部动作（决定步行距离/裁剪区域输入与预览叠加框） */
+const markerIsHandTask = computed(
+  () => isHandTask(markerTaskChoice.value),
+);
+/** 预览视频上的裁剪框（按原始分辨率换算百分比） */
+const cropOverlayStyle = computed(() => {
+  const project = selectedProject.value;
+  if (!project?.width || !project.height) return {};
+  const { x, y, w, h } = cropRegion.value;
+  return {
+    left: `${(x / project.width) * 100}%`,
+    top: `${(y / project.height) * 100}%`,
+    width: `${(w / project.width) * 100}%`,
+    height: `${(h / project.height) * 100}%`,
+  };
+});
+/** 预览视频宽高比跟随源视频（保证裁剪框按百分比精确对齐） */
+const previewAspectRatio = computed(() => {
+  const project = selectedProject.value;
+  return project?.width && project.height
+    ? `${project.width} / ${project.height}`
+    : "16 / 9";
+});
 
 const projects = ref<SegmentationProject[]>([]);
 const selectedId = ref<string | null>(null);
@@ -181,6 +222,12 @@ async function selectProject(project: SegmentationProject) {
   markerStart.value = 0;
   markerEnd.value = project.duration_s ?? 0;
   walkDistanceM.value = project.walk_distance_m?.toString() ?? "";
+  if (project.crop_region) {
+    const [x, y, w, h] = project.crop_region;
+    cropRegion.value = { x, y, w, h };
+  } else {
+    cropRegion.value = { ...DEFAULT_CROP_REGION };
+  }
   await nextTick();
   if (videoElement.value) videoElement.value.currentTime = 0;
   configurePolling(project.status);
@@ -432,10 +479,24 @@ async function saveSegments() {
       start_s: Number(item.start_s.toFixed(3)),
       end_s: Number(item.end_s.toFixed(3)),
     }));
+    // 含手部动作分段时保存裁剪区域（作用于整段视频）
+    const hasHandSegments = normalized.some((item) =>
+      isHandTask(item.task_type),
+    );
+    const parsedCrop: [number, number, number, number] | undefined =
+      hasHandSegments
+        ? [
+            cropRegion.value.x,
+            cropRegion.value.y,
+            cropRegion.value.w,
+            cropRegion.value.h,
+          ]
+        : undefined;
     const project = await api.saveVideoSegments(
       selectedProject.value.id,
       normalized,
       parsedWalkDistance,
+      parsedCrop,
     );
     replaceProject(project);
     segments.value = project.segments.map((item) => ({ ...item }));
@@ -455,6 +516,30 @@ async function copyArchivePath() {
     notice.value = "归档路径已复制。";
   } catch {
     actionError.value = "无法复制路径，请手动选择路径文本。";
+  }
+}
+
+const deletingProject = ref(false);
+async function deleteProject(project: SegmentationProject) {
+  if (deletingProject.value) return;
+  const target = project;
+  if (!window.confirm(`确认删除分割项目“${target.name}”？\n将同时删除归档目录中的原始文件、预览和分段文件。`)) {
+    return;
+  }
+  deletingProject.value = true;
+  actionError.value = "";
+  notice.value = "";
+  try {
+    await api.deleteProject(target.id);
+    if (selectedId.value === target.id) {
+      selectedId.value = null;
+    }
+    projects.value = projects.value.filter((item) => item.id !== target.id);
+    notice.value = `已删除项目“${target.name}”，归档目录已清理。`;
+  } catch (error) {
+    actionError.value = messageFromError(error, "删除分割项目失败。");
+  } finally {
+    deletingProject.value = false;
   }
 }
 
@@ -584,6 +669,15 @@ onUnmounted(() => {
                     : "失败"
               }}
             </span>
+            <span
+              class="archive-delete"
+              role="button"
+              aria-label="删除项目"
+              title="删除项目（含归档文件）"
+              @click.stop="deleteProject(project)"
+            >
+              <Trash2 :size="14" />
+            </span>
           </button>
         </div>
       </aside>
@@ -658,9 +752,15 @@ onUnmounted(() => {
                     :src="previewUrl"
                     controls
                     preload="metadata"
+                    :style="{ aspectRatio: previewAspectRatio }"
                     @loadedmetadata="onLoadedMetadata"
                     @timeupdate="onTimeUpdate"
                     @seeked="onTimeUpdate"
+                  />
+                  <div
+                    v-if="markerIsHandTask"
+                    class="crop-overlay"
+                    :style="cropOverlayStyle"
                   />
                   <div class="time-readout">
                     <Clock :size="16" />
@@ -709,7 +809,7 @@ onUnmounted(() => {
                   </div>
                 </div>
 
-                <label class="field">
+                <label v-if="!markerIsHandTask" class="field">
                   <span>实际步行距离（米，可选）</span>
                   <input
                     v-model="walkDistanceM"
@@ -720,6 +820,53 @@ onUnmounted(() => {
                     @input="dirty = true"
                   />
                 </label>
+
+                <div v-else class="field crop-region-field">
+                  <span>裁剪区域（x, y, w, h，像素）</span>
+                  <div class="crop-region-inputs">
+                    <label>
+                      x
+                      <input
+                        v-model.number="cropRegion.x"
+                        type="number"
+                        min="0"
+                        step="1"
+                        @input="dirty = true"
+                      />
+                    </label>
+                    <label>
+                      y
+                      <input
+                        v-model.number="cropRegion.y"
+                        type="number"
+                        min="0"
+                        step="1"
+                        @input="dirty = true"
+                      />
+                    </label>
+                    <label>
+                      w
+                      <input
+                        v-model.number="cropRegion.w"
+                        type="number"
+                        min="1"
+                        step="1"
+                        @input="dirty = true"
+                      />
+                    </label>
+                    <label>
+                      h
+                      <input
+                        v-model.number="cropRegion.h"
+                        type="number"
+                        min="1"
+                        step="1"
+                        @input="dirty = true"
+                      />
+                    </label>
+                  </div>
+                  <small>预览画面中绿色方框实时预览裁剪范围</small>
+                </div>
 
                 <label class="field">
                   <span>任务</span>
@@ -1197,6 +1344,32 @@ onUnmounted(() => {
   background: #fff0f0;
 }
 
+.archive-delete {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  color: var(--ink-300);
+  border-radius: 6px;
+  opacity: 0;
+  transition:
+    opacity 0.15s ease,
+    color 0.15s ease,
+    background 0.15s ease;
+}
+
+.archive-item:hover .archive-delete,
+.archive-item.active .archive-delete {
+  opacity: 1;
+}
+
+.archive-delete:hover {
+  color: var(--danger);
+  background: #fff0f0;
+}
+
 .archive-loading,
 .archive-empty {
   display: flex;
@@ -1369,11 +1542,21 @@ onUnmounted(() => {
 }
 
 .video-stage {
+  position: relative;
   overflow: hidden;
   border: 1px solid #263b4d;
   border-radius: 12px;
   background: #071522;
   box-shadow: 0 14px 30px rgba(5, 23, 38, 0.14);
+}
+
+.crop-overlay {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+  border: 2px solid rgba(0, 220, 0, 0.9);
+  border-radius: 3px;
+  box-shadow: 0 0 0 9999px rgba(3, 12, 20, 0.35);
 }
 
 .video-stage video {
@@ -1526,6 +1709,38 @@ onUnmounted(() => {
 
 .marker-card .field + .field {
   margin-top: 12px;
+}
+
+.crop-region-field small {
+  display: block;
+  margin-top: 4px;
+  color: var(--ink-400);
+  font-size: 9px;
+}
+
+.crop-region-inputs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.crop-region-inputs label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: var(--ink-400);
+  font-size: 9px;
+}
+
+.crop-region-inputs input {
+  width: 100%;
+  padding: 6px;
+  color: var(--ink-800);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  outline: none;
+  background: #ffffff;
+  font-size: 10px;
 }
 
 .marker-time {

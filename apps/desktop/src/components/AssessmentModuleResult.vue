@@ -14,7 +14,11 @@ defineProps<{
 
 function hasTasks(result: ModuleResult) {
   const tasks = result.result_data.tasks;
-  return Boolean(tasks && typeof tasks === "object" && !Array.isArray(tasks));
+  const segments = result.result_data.segments;
+  return Boolean(
+    (tasks && typeof tasks === "object" && !Array.isArray(tasks)) ||
+      (Array.isArray(segments) && segments.length > 0),
+  );
 }
 </script>
 
@@ -24,9 +28,13 @@ function hasTasks(result: ModuleResult) {
     :assessment-id="assessmentId"
     :result="result"
   />
-  <MotionTaskResult v-else-if="hasTasks(result)" :result="result" />
+  <MotionTaskResult
+    v-else-if="hasTasks(result)"
+    :assessment-id="assessmentId"
+    :module-id="moduleId"
+    :result="result"
+  />
   <div v-else class="generic-module-result">
-    <p v-if="result.summary" class="result-summary">{{ result.summary }}</p>
     <div class="generic-metric-grid">
       <article v-for="(value, key) in result.scores" :key="`score-${key}`">
         <span>{{ metricLabel(key) }}</span>
