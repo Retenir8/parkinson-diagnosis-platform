@@ -4,12 +4,34 @@ import json
 from pathlib import Path
 
 import pytest
+import sklearn
 
 from app.modules.providers.overall_posture import (
     WALK_FEATURES,
     OverallPostureModule,
 )
 from app.schemas.modules import InferenceRequest, InputArtifact
+
+
+def _sklearn_version() -> tuple[int, ...]:
+    parts = []
+    for part in sklearn.__version__.split(".")[:2]:
+        try:
+            parts.append(int(part))
+        except ValueError:
+            parts.append(0)
+    return tuple(parts)
+
+
+# walk17 模型 artifact 使用 scikit-learn 1.8.0 生成；旧环境（如 Python 3.9
+# 的 conda d2l，sklearn 最高 1.6.1）加载会校验失败，自动跳过契约测试。
+pytestmark = pytest.mark.skipif(
+    _sklearn_version() < (1, 8),
+    reason=(
+        "scikit-learn 版本过低：walk17 模型 artifact 需要 >= 1.8.0，"
+        f"当前 {sklearn.__version__}"
+    ),
+)
 
 
 def test_overall_posture_walk17_inference_contract(

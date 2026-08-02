@@ -103,6 +103,10 @@ class InferenceModule:
 | 方法 | 路径 | 用途 |
 |---|---|---|
 | `GET` | `/api/v1/assessments/{assessment_id}/modules/{module_id}/outputs/{artifact_index}` | 读取该模块 `output_artifacts` 中的一个已登记文件 |
+| `DELETE` | `/api/v1/assessments/{assessment_id}/outputs` | 删除该评估的全部推理输出文件（保留评估记录与评分） |
+| `DELETE` | `/api/v1/assessments/{assessment_id}` | 删除整个评估（含输出与报告） |
+| `DELETE` | `/api/v1/patients/{patient_id}/artifacts/{artifact_id}` | 删除一份患者资料 |
+| `DELETE` | `/api/v1/segmentation-projects/{project_id}` | 删除一个分割项目（含原始文件与分段清单） |
 
 整体姿态的 `result_data.visualization.annotated_videos[]` 记录 `segment_id`、`artifact_index`、`media_type` 和视频内叠加的指标名。当前输出 VP8/WebM，视频画面包含骨架、帧号、时间、姿态检测状态和有效深度比例。
 
@@ -141,6 +145,7 @@ AssessmentRepository.merge_module_runs(
 | `GET` | `/api/v1/segmentation-projects/{id}` | 读取预览处理状态和已保存片段 |
 | `GET` | `/api/v1/segmentation-projects/{id}/preview` | 读取浏览器使用的 WebM 预览 |
 | `PUT` | `/api/v1/segmentation-projects/{id}/segments` | 校验并保存分段清单 |
+| `DELETE` | `/api/v1/segmentation-projects/{id}` | 删除项目（含原始文件、预览和分段清单） |
 
 每个片段固定包含：
 
@@ -160,8 +165,8 @@ AssessmentRepository.merge_module_runs(
 - `end_s > start_s >= 0`，且不能超过视频时长；
 - 当前界面拒绝时间重叠的片段；
 - 时间基准是原始文件第一帧，与 `analyze_bag_segments.py` 一致；
-- 页面提供 `walk`、`turn`、`stand`、`other` 和自定义 `task_type` 选择，但只负责写入字段，不赋予或假设模型评分含义；
-- 项目可选记录 `walk_distance_m`，该值写入 `segments.json` 供整体姿态 `SP_U` 计算使用；
+- 页面提供整体姿态 `walk`、`turn`、`stand`、`other` 和手部 `finger_opposition`、`hand_alternation`、`fist_clenching` 以及自定义 `task_type` 选择，但只负责写入字段，不赋予或假设模型评分含义；
+- `segments.json` 顶层可记录 `walk_distance_m`（供整体姿态 `SP_U` 计算）和 `crop_region: [x, y, w, h]`（供手部模块裁剪检测区域）；
 - 保存时同时生成 `segments.csv` 和 `segments.json`，与原始文件、预览文件、`project.json` 放在 `data/video_segments/<项目目录>/`。
 
 ## 各模块接入状态与待确认事项
@@ -180,24 +185,22 @@ AssessmentRepository.merge_module_runs(
 
 ### 手部视频
 
-等待负责人提供：
+已接入（`hand-motion`），见 [MODEL_INTEGRATION_HAND.md](MODEL_INTEGRATION_HAND.md)：
 
-1. 模型格式、Python 版本和依赖文件；
-2. 输入动作、相机视角、帧率、裁剪方式；
-3. 是否需要左右手分别推理；
-4. 输出字段、单位、分数含义和置信度；
-5. CPU/GPU 要求和单段视频基准时间；
-6. 可供自动测试的匿名样例和期望输出。
+1. 纯规则状态机（无独立模型文件），基于 MediaPipe Hands 关键点；
+2. 输入 `hand_video`（realsense_bag / video），默认裁剪区域 `(400, 100, 480, 480)`；
+3. 支持可选分段模式：`segment_manifest` 槽传入带 `task_type` 的 `segments.json`（顶层 `crop_region` 可覆盖默认裁剪），每段只运行对应动作的检测与评分；
+4. 输出三任务×左右侧 MDS-UPDRS 0-4 评分，`result_data` 为 `{segments: [...]}`（分段模式）或 `{tasks: {...}}`（不分段）；
+5. 每段生成 VP8/WebM 标注视频（骨架 + 计数 + 时间轴），通过 `output_artifacts` 受限接口访问。
 
 ### 腿部视频
 
-等待负责人提供：
+已接入（`leg-motion`），见 [MODEL_INTEGRATION_LEG.md](MODEL_INTEGRATION_LEG.md)：
 
-1. 与整体姿态是否共享解码帧或关键点；
-2. 输入动作、视角、片段边界；
-3. 模型格式、运行依赖和硬件要求；
-4. 输出指标、评分范围、质量门控；
-5. 可视化需要关键点、角度曲线还是标注视频。
+1. 纯规则状态机，基于 MediaPipe Pose 关键点；
+2. 两个独立输入槽 `toe_tapping_video` / `leg_agility_video`，各对应一个任务；
+3. 输出两任务×左右侧 MDS-UPDRS 0-4 评分；
+4. 每个任务生成 VP8/WebM 标注视频，通过 `output_artifacts` 受限接口访问。
 
 ### 智能鞋垫
 

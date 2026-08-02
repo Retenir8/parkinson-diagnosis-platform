@@ -16,7 +16,10 @@ from app.api.dependencies import (
     get_artifact_repository,
     get_patient_repository,
 )
-from app.repositories.artifacts import ArtifactRepository
+from app.repositories.artifacts import (
+    ArtifactNotFoundError,
+    ArtifactRepository,
+)
 from app.repositories.patients import PatientNotFoundError, PatientRepository
 from app.schemas.artifacts import Artifact, InputKind, LocalArtifactCreate
 
@@ -111,4 +114,21 @@ def register_local_artifact(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="本地文件不存在或无法读取。",
+        ) from error
+
+
+@router.delete("/{artifact_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_artifact(
+    patient_id: str,
+    artifact_id: str,
+    patients: PatientRepository = Depends(get_patient_repository),
+    artifacts: ArtifactRepository = Depends(get_artifact_repository),
+) -> None:
+    ensure_patient(patient_id, patients)
+    try:
+        artifacts.delete(patient_id, artifact_id)
+    except ArtifactNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="资料不存在。",
         ) from error

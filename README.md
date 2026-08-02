@@ -9,7 +9,8 @@ Vue 3 / TypeScript / Vite 前端 + FastAPI 后端 + Tauri 桌面壳。
 System/
 ├─ apps/desktop/       Vue 3 + TypeScript + Vite + Tauri
 ├─ server/             FastAPI 本地服务和模型适配接口
-├─ data/               本地患者、资料、评估和报告
+│  └─ tests/           后端测试（API / E2E / 推理 / 评分指标 / 清理）
+├─ data/               本地患者、资料、评估和报告（不入 Git）
 └─ docs/               架构、接口和模型接入文档
 ```
 
@@ -24,13 +25,21 @@ System/
 
 整姿态、手部和腿部模块已实现独立推理和结果 JSON。详见 [整体姿态接入文档](docs/MODEL_INTEGRATION_OVERALL.md)、[手部接入文档](docs/MODEL_INTEGRATION_HAND.md) 和 [腿部接入文档](docs/MODEL_INTEGRATION_LEG.md)。
 
+主要能力：
+
+- **手部/腿部可视化**：推理产物为 VP8/WebM 标注视频（骨架、计数、状态、时间轴），前端单窗口播放 + 下拉切换分段。
+- **手部分段模式**：可上传 `segments.json`（含 `segment_id/label/task_type/start_s/end_s` 与可选顶层 `crop_region`），每段只运行对应动作的检测与评分。
+- **MDS-UPDRS 评分**：停顿（1.5 s）/ 冻结（3.0 s）/ 速度衰减 / 幅度衰减 → 0-4 级，总评 = `ceil((停顿 + 速度 + 幅度) / 3)`。
+- **存储去重与清理**：同内容文件硬链接去重（`content_index.json`）、资料/分割项目/评估/输出的 DELETE 接口。
+- **页面状态保持**：采集评估页 KeepAlive 缓存，切换页面后推理进度、文件列表不丢失。
+
 当前实现固定使用 MediaPipe `0.10.21` 的 Legacy Solutions API；请按仓库依赖文件安装，不要单独升级 MediaPipe。RealSense 运行环境和 `pyrealsense2` 仍作为部署前置条件。
 
 ## 首次设置
 
 ### Python（二选一）
 
-**方式 A：使用虚拟环境（推荐）**
+**方式 A：使用虚拟环境（推荐，Python ≥ 3.10）**
 ```powershell
 cd System\server
 py -3.12 -m venv .venv
@@ -43,6 +52,8 @@ py -3.12 -m venv .venv
 pip install -r server/requirements.txt
 pip install pyrealsense2
 ```
+
+> 注意：整体姿态 walk17 模型 artifact 使用 `scikit-learn==1.8.0` 生成（需要 Python ≥ 3.10）。在 Python 3.9 等旧环境（sklearn < 1.8.0）中，整体姿态契约测试会自动跳过，其余测试不受影响（见下方「验证」）。
 
 ### 前端
 
@@ -70,39 +81,53 @@ npm run dev:web:system
 ## 使用流程
 
 1. **患者管理**：创建患者档案
-2. **视频分割（需要整体姿态时间段时）**：
+2. **视频分割（需要分段信息时）**：
    - 导入普通视频或 RealSense `.bag`
    - 在播放器中把当前时间设为片段开始/结束
-   - 选择 `walk / turn / stand / other`，确认 `label`
+   - 整体姿态选择 `walk / turn / stand / other`；手部选择 `finger_opposition / hand_alternation / fist_clenching`，并可为该视频设置裁剪区域 `crop_region (x, y, w, h)`
    - 保存后在同一目录获得原始文件、`segments.csv` 和 `segments.json`
 3. **采集评估**：
    - 选择患者 → 拖入视频文件到对应模块的输入槽
    - 整体姿态：分别提供 RealSense `.bag` 和分割页保存的 `segments.csv/json`
-   - 手部：一个槽，拖入包含三个动作的 .bag 文件
+   - 手部：一个槽，拖入包含三个动作的 .bag 文件；如需分段模式，再拖入带 `task_type` 的 `segments.json`
    - 腿部：两个槽，分别拖入脚趾拍地和抬腿的 .bag 文件
-4. 点击 **开始分析**：系统登记输入后自动启动各模块独立推理
-5. **查看结果**：页面按已上传模块展开；整体姿态展示骨架视频、实时叠加指标、17项特征和分类概率，手部/腿部展示各任务×左右侧指标
-6. **报告中心**：查看患者级结构化报告、各模块详细指标，以及来自整体姿态模型的研究性健康/轻度/中重度分层
+4. 点击 **开始分析**：系统登记输入后自动启动各模块独立推理（页面切换后状态保留，推理完成后自动刷新）
+5. **查看结果**：页面按已上传模块展开；整体姿态展示骨架视频、实时叠加指标、17 项特征和分类概率，手部/腿部展示各任务×左右侧指标与标注视频
+6. **报告中心**：查看患者级结构化报告、各模块详细指标，以及来自整体姿态模型的研究性健康/轻度/中重度分层；删除报告即删除对应评估记录
+7. **清理**：可删除患者资料、分割项目、评估输出（保留评估与评分）或整个评估；相同内容的资料会自动硬链接去重
 
 ## 验证
 
 ```powershell
+# 后端测试
 cd System\server
 python -m pytest tests/ -v
 
+# 前端类型检查
 cd System
 npm run typecheck
 ```
+
+> 在 Python 3.9 等旧环境（scikit-learn < 1.8.0）中，`test_overall_posture_walk17_inference_contract` 会自动跳过并注明原因（walk17 模型 artifact 需要 sklearn ≥ 1.8.0），其余测试不受影响。
+
+测试数据统一放在 `data/samples/`，具体目录和文件名见 [本地数据目录说明](data/README.md)。样例数据不会提交到 Git。
 
 ## 测试脚本
 
 | 脚本 | 用途 |
 |---|---|
-| `server/tests/test_api.py` | API 端点单元测试 |
+| `server/tests/test_api.py` | API 端点单元测试（患者、资料、评估、报告、分割） |
 | `server/tests/test_e2e.py` | 端到端上传文件 + 创建评估（需要服务运行） |
 | `server/tests/test_inference.py` | 直接调用推理模块（需要 .bag 文件，不依赖服务） |
+| `server/tests/test_overall_posture.py` | 整体姿态 walk17 特征契约与推理链路 |
+| `server/tests/test_scoring_metrics.py` | 停顿/速度/幅度评分指标 + 轮替防抖状态机 |
+| `server/tests/test_cleanup.py` | 硬链接去重、DELETE 清理、本地引用预检 |
 
-推理/E2E 样例统一放在 `data/samples/`，具体目录和文件名见 [本地数据目录说明](data/README.md)。样例数据不会提交到 Git。
+## 数据与存储
+
+- 全部临床数据（患者、资料、评估、报告、分割项目、去重索引）位于 `data/`，已被 `.gitignore` 排除，详情见 [data/README.md](data/README.md)。
+- 相同内容的文件（≥ 1 MB）自动硬链接去重，索引保存在 `data/content_index.json`。
+- 推理启动前会预检所有输入资料是否在本地磁盘上仍可读取；缺失时拒绝启动并提示。
 
 ## 接入模型
 

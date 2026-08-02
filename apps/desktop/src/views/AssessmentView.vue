@@ -1,4 +1,7 @@
 <script setup lang="ts">
+// 组件名用于 KeepAlive 缓存（切页后返回保留当前状态，如推理中）
+defineOptions({ name: "AssessmentView" });
+
 import {
   BarChart3,
   Braces,
@@ -14,7 +17,7 @@ import {
   Upload,
   UserRound,
 } from "@lucide/vue";
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onActivated, onMounted, onUnmounted, ref } from "vue";
 import { useRoute } from "vue-router";
 
 import AssessmentModuleResult from "@/components/AssessmentModuleResult.vue";
@@ -63,11 +66,21 @@ const selectedPatient = computed(() => patients.selectedPatient);
 const selectedModuleCount = computed(
   () => new Set(sources.value.map((source) => source.moduleId)).size,
 );
+/** 评估已创建但尚未产生最终报告（推理中/排队中） */
+const hasPendingAssessment = computed(() => {
+  const status = assessment.value?.status;
+  return (
+    status === "draft" ||
+    status === "queued" ||
+    status === "running"
+  );
+});
 const canCreate = computed(
   () =>
     Boolean(selectedPatient.value) &&
     sources.value.length > 0 &&
-    !running.value,
+    !running.value &&
+    !hasPendingAssessment.value,
 );
 
 const compactSlotLabels: Record<string, string> = {
@@ -247,10 +260,10 @@ function startPolling() {
   if (pollTimer) return;
   pollTimer = setInterval(async () => {
     if (!assessment.value) return;
-    const hasRunning = Object.values(
+    const stillPending = Object.values(
       assessment.value.module_runs,
-    ).some((r) => r.status === "running");
-    if (!hasRunning) {
+    ).some((r) => r.status === "queued" || r.status === "running");
+    if (!stillPending) {
       stopPolling();
       return;
     }
@@ -370,7 +383,42 @@ async function refreshResults() {
   }
 }
 
+const clearingOutputs = ref(false);
+async function clearOutputs() {
+  if (!assessment.value || clearingOutputs.value) return;
+  if (
+    !window.confirm(
+      "确认清理本次评估的推理产物？\n将删除标注视频、关键点 CSV 等输出文件，评估记录与评分会保留。",
+    )
+  ) {
+    return;
+  }
+  clearingOutputs.value = true;
+  actionError.value = "";
+  try {
+    await api.clearAssessmentOutputs(assessment.value.id);
+    assessment.value = await api.getAssessment(assessment.value.id);
+  } catch (error) {
+    actionError.value =
+      error instanceof Error ? error.message : "清理输出文件失败。";
+  } finally {
+    clearingOutputs.value = false;
+  }
+}
+
 onMounted(async () => {
+  await patients.load();
+  try {
+    modules.value = await api.listModules();
+  } catch (error) {
+    actionError.value =
+      error instanceof Error ? error.message : "模型模块状态读取失败。";
+  }
+});
+
+// KeepAlive 恢复激活时也会触发：处理从患者页带 patient 参数进入
+// （首次挂载同样会触发一次；patients.load 幂等，重试无副作用）
+onActivated(async () => {
   await patients.load();
   const patientFromQuery =
     typeof route.query.patient === "string" ? route.query.patient : null;
@@ -379,13 +427,6 @@ onMounted(async () => {
     patients.items.some((patient) => patient.id === patientFromQuery)
   ) {
     patients.select(patientFromQuery);
-  }
-
-  try {
-    modules.value = await api.listModules();
-  } catch (error) {
-    actionError.value =
-      error instanceof Error ? error.message : "模型模块状态读取失败。";
   }
 });
 </script>
@@ -557,7 +598,13 @@ onMounted(async () => {
           <div>
             <Link2 :size="20" />
             <span>
-              <strong>准备完成后开始分析</strong>
+              <strong>
+                {{
+                  hasPendingAssessment
+                    ? "推理进行中，等待报告生成…"
+                    : "准备完成后开始分析"
+                }}
+              </strong>
             </span>
           </div>
           <button
@@ -567,7 +614,13 @@ onMounted(async () => {
             @click="createAssessment"
           >
             <Play :size="17" fill="currentColor" />
-            {{ running ? "正在启动分析…" : "开始分析" }}
+            {{
+              running
+                ? "正在启动分析…"
+                : hasPendingAssessment
+                  ? "推理进行中…"
+                  : "开始分析"
+            }}
           </button>
         </div>
       </div>
@@ -589,6 +642,15 @@ onMounted(async () => {
           >
             <RefreshCw :size="15" :class="{ spinning: refreshingResult }" />
             刷新结果
+          </button>
+          <button
+            class="button small secondary danger"
+            type="button"
+            :disabled="clearingOutputs || assessment.status === 'running'"
+            @click="clearOutputs"
+          >
+            <Trash2 :size="15" />
+            {{ clearingOutputs ? "清理中…" : "清理输出文件" }}
           </button>
         </div>
       </header>

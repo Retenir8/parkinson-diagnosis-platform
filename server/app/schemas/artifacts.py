@@ -35,4 +35,7 @@ class Artifact(BaseModel):
     source_type: ArtifactSource
     stored_path: str
     size_bytes: int | None = None
+    file_mtime: float | None = None
+    # 列表接口按需计算：本地引用文件是否仍然可达且未被修改
+    available: bool | None = None
     created_at: datetime

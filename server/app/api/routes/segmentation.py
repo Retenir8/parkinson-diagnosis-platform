@@ -117,6 +117,9 @@ async def upload_project(
     finally:
         await file.close()
 
+    # 内容寻址去重：与患者资料中已有的相同内容共享存储（同卷硬链接）
+    repository.deduplicate(destination)
+
     background_tasks.add_task(
         _build_preview,
         project.id,
@@ -193,4 +196,21 @@ def save_segments(
         project_id,
         payload.segments,
         walk_distance_m=payload.walk_distance_m,
+        crop_region=payload.crop_region,
     )
+
+
+@router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_project(
+    project_id: str,
+    repository: SegmentationRepository = Depends(
+        get_segmentation_repository
+    ),
+) -> None:
+    try:
+        repository.delete(project_id)
+    except SegmentationProjectNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="未找到视频分割项目。",
+        ) from error

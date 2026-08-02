@@ -121,7 +121,12 @@ onMounted(async () => {
       </header>
 
       <div class="page-container">
-        <RouterView />
+        <!-- KeepAlive：采集评估页切走再返回时保留当前状态（文件列表/推理进度） -->
+        <RouterView v-slot="{ Component }">
+          <KeepAlive include="AssessmentView">
+            <component :is="Component" />
+          </KeepAlive>
+        </RouterView>
       </div>
     </main>
   </div>

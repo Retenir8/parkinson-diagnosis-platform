@@ -5,13 +5,14 @@
 - 脚趾拍地 (Toe Tapping)  — MDS-UPDRS 3.7 → slot: toe_tapping_video
 - 腿部灵活性 (Leg Agility) — MDS-UPDRS 3.8 → slot: leg_agility_video
 
-无头模式：不产生 OpenCV 窗口、不写标注视频，仅返回评分。
+无头模式：不产生 OpenCV 窗口，每个任务生成一段 VP8/WebM 标注视频。
 """
 
 from __future__ import annotations
 
 import math
 import logging
+import tempfile
 from collections import deque
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -24,6 +25,11 @@ from app.modules.base import (
     ProgressCallback,
 )
 from app.modules.mediapipe_compat import prepare_legacy_solutions
+from app.modules.video_annotation import (
+    AnnotatedVideoWriter,
+    draw_leg_skeleton,
+    put_text_block,
+)
 from app.schemas.modules import (
     InputSlotDescriptor,
     InferenceRequest,
@@ -67,6 +73,7 @@ def _analyze_pauses(records: List[Dict], pause_threshold: float,
 
 
 def _analyze_speed(records: List[Dict]) -> Dict:
+    """速度变化比：首 1/3 平均速度 vs 末 1/3 平均速度。"""
     if len(records) < 2:
         return {"slow_level": 0, "speed_ratio": 1.0}
     speeds: List[float] = []
@@ -76,7 +83,10 @@ def _analyze_speed(records: List[Dict]) -> Dict:
             speeds.append(1.0 / dur)
     if len(speeds) < 2:
         return {"slow_level": 0, "speed_ratio": 1.0}
-    ratio = speeds[-1] / speeds[0] if speeds[0] > 0 else 1.0
+    third = max(1, len(speeds) // 3)
+    first_avg = sum(speeds[:third]) / third
+    last_avg = sum(speeds[-third:]) / third
+    ratio = last_avg / first_avg if first_avg > 0 else 1.0
     level = 0
     for i, t in enumerate(SPEED_THRESHOLDS):
         if ratio < t:
@@ -84,19 +94,32 @@ def _analyze_speed(records: List[Dict]) -> Dict:
     return {"slow_level": level, "speed_ratio": ratio}
 
 
-def _analyze_amplitude(amplitudes: List[float], base: Optional[float]) -> Dict:
-    if not amplitudes or base is None or base == 0:
+def _analyze_amplitude(amplitudes: List[float]) -> Dict:
+    """幅度衰减分级：基准取序列峰值，按前后半段平均判定。
+
+    - 3 级：前一半平均幅度不足峰值 70%（一开始就衰减）
+    - 2 级：后一半平均幅度不足峰值 70%（中后期明显衰减）
+    - 1 级：后一半平均幅度不足峰值 90%（仅末期轻度衰减）
+    """
+    valid = [a for a in amplitudes if a is not None and a > 0]
+    if not valid:
         return {"amplitude_decrease": 0}
-    ratios = [a / base for a in amplitudes if a > 0]
+    base = float(np.max(valid))
+    if base <= 0:
+        return {"amplitude_decrease": 0}
+    ratios = [a / base for a in valid]
+    n = len(ratios)
     decrease = 0
-    if len(ratios) >= 10 and ratios[-1] < 0.8:
-        decrease = 1
-    elif len(ratios) >= 5 and ratios[4] < 0.7:
-        decrease = 2
-    elif len(ratios) >= 3 and all(
-        ratios[i] > ratios[i + 1] for i in range(len(ratios) - 1)
-    ):
-        decrease = 3
+    if n >= 4:
+        half = n // 2
+        first_avg = sum(ratios[:half]) / half
+        last_avg = sum(ratios[half:]) / (n - half)
+        if first_avg < 0.7:
+            decrease = 3
+        elif last_avg < 0.7:
+            decrease = 2
+        elif last_avg < 0.9:
+            decrease = 1
     return {"amplitude_decrease": decrease}
 
 
@@ -111,9 +134,10 @@ def _mds_updrs_score(pause_analysis: Dict, speed_analysis: Dict,
         pause_sub = 0
     elif total_pauses <= 2:
         pause_sub = 1
-    elif 3 <= total_pauses <= 5:
+    elif total_pauses <= 5 and long_freezes == 0:
         pause_sub = 2
     else:
+        # >5 次停顿，或 3-5 次但存在冻结（freezing）
         pause_sub = 3
 
     score = math.ceil((pause_sub + slow_level + amp_decrease) / 3.0)
@@ -205,8 +229,12 @@ def _process_one_task(
     required_actions: int,
     pose_conf: Tuple[float, float, int],
     progress: ProgressCallback | None = None,
-) -> Tuple[Dict, List[str], Dict]:
-    """Process one video for one task, return (per_side_results, warnings, quality)."""
+    output_dir: Path | None = None,
+) -> Tuple[Dict, List[str], Dict, Optional[Path]]:
+    """Process one video for one task.
+
+    Returns (per_side_results, warnings, quality, annotated_video_path).
+    """
 
     import pyrealsense2 as rs
     import mediapipe as mp
@@ -221,59 +249,83 @@ def _process_one_task(
     min_det, min_trk, model_cx = pose_conf
 
     # ---- open video source ----
-    depth_intrinsics = None
+    def _open_source():
+        """打开视频源，返回 (read_fn, probe_fn, cleanup, nominal_fps, depth_intrinsics)。
 
-    if is_bag:
-        pipeline = rs.pipeline()
-        config = rs.config()
-        rs.config.enable_device_from_file(
-            config, str(video_path), repeat_playback=False,
-        )
-        profile = pipeline.start(config)
-        align = rs.align(rs.stream.color)
-        depth_profile = profile.get_stream(rs.stream.depth)
-        depth_intrinsics = (
-            depth_profile.as_video_stream_profile().get_intrinsics()
-        )
-        color_profile = profile.get_stream(rs.stream.color)
-        fps = color_profile.as_video_stream_profile().fps()
-        try:
-            ff = pipeline.wait_for_frames(timeout_ms=5000)
-            af = align.process(ff)
-            ad = af.get_depth_frame()
-            if ad:
-                depth_intrinsics = (
-                    ad.get_profile().as_video_stream_profile().get_intrinsics()
-                )
-        except Exception:
-            pass
-
-        def _read():
+        read_fn 返回 (完整帧, depth_frame|None, 时间戳秒, is_rgb)：
+        RealSense 帧为 RGB 视图（零拷贝），普通视频为 BGR。
+        probe_fn 只取帧时间戳（不做 align/numpy），用于快速测帧率。
+        """
+        if is_bag:
+            pipeline = rs.pipeline()
+            config = rs.config()
+            rs.config.enable_device_from_file(
+                config, str(video_path), repeat_playback=False,
+            )
+            profile = pipeline.start(config)
+            # 非实时播放：尽快送出所有帧，避免处理速度拖慢播放器
+            # 导致丢帧/卡顿（wait_for_frames 超时被误判为结束）
             try:
-                frames = pipeline.wait_for_frames(timeout_ms=5000)
-            except RuntimeError:
-                return None
-            ts = frames.get_timestamp() / 1000.0
-            af = align.process(frames)
-            df = af.get_depth_frame()
-            cf = af.get_color_frame()
-            if not df or not cf:
-                return None
-            ci = np.asanyarray(cf.get_data())
-            if ci.shape[-1] == 3:
-                ci = cv2.cvtColor(ci, cv2.COLOR_RGB2BGR)
-            if cfg.crop_region:
-                x, y, w, h = cfg.crop_region
-                ci = ci[y:y + h, x:x + w]
-            return ci, df, ts
+                profile.get_device().as_playback().set_real_time(False)
+            except Exception:
+                pass
+            align = rs.align(rs.stream.color)
+            depth_profile = profile.get_stream(rs.stream.depth)
+            di = depth_profile.as_video_stream_profile().get_intrinsics()
+            color_profile = profile.get_stream(rs.stream.color)
+            nominal_fps = color_profile.as_video_stream_profile().fps()
+            try:
+                ff = pipeline.wait_for_frames(timeout_ms=5000)
+                af = align.process(ff)
+                ad = af.get_depth_frame()
+                if ad:
+                    di = (
+                        ad.get_profile()
+                        .as_video_stream_profile()
+                        .get_intrinsics()
+                    )
+            except Exception:
+                pass
 
-        read_fn = _read
+            def _read():
+                try:
+                    frames = pipeline.wait_for_frames(timeout_ms=5000)
+                except RuntimeError:
+                    return None
+                ts = frames.get_timestamp() / 1000.0
+                af = align.process(frames)
+                df = af.get_depth_frame()
+                cf = af.get_color_frame()
+                if not df or not cf:
+                    return None
+                # RealSense 原生 RGB：返回视图（必要时转连续，
+                # MediaPipe 要求 c_contiguous；连续时零拷贝）
+                ci = np.ascontiguousarray(np.asanyarray(cf.get_data()))
+                if cfg.crop_region:
+                    x, y, w, h = cfg.crop_region
+                    ci = ci[y:y + h, x:x + w]
+                return ci, df, ts, True
 
-        def cleanup():
-            pipeline.stop()
-    else:
+            def _probe():
+                """只取帧时间戳，跳过 align/numpy（测帧率用）。"""
+                try:
+                    frames = pipeline.wait_for_frames(timeout_ms=5000)
+                except RuntimeError:
+                    return None
+                if (
+                    frames.get_depth_frame() is None
+                    or frames.get_color_frame() is None
+                ):
+                    return None
+                return frames.get_timestamp() / 1000.0
+
+            def _cleanup():
+                pipeline.stop()
+
+            return _read, _probe, _cleanup, nominal_fps, di
+
         cap = cv2.VideoCapture(str(video_path))
-        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        nominal_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
 
         def _read():
             ok, frame = cap.read()
@@ -282,12 +334,53 @@ def _process_one_task(
             if cfg.crop_region:
                 x, y, w, h = cfg.crop_region
                 frame = frame[y:y + h, x:x + w]
-            return frame, None, cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
+            return frame, None, cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0, False
 
-        read_fn = _read
+        def _probe():
+            """只推进帧位置取时间戳，不解码图像（测帧率用）。"""
+            if not cap.grab():
+                return None
+            return cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
 
-        def cleanup():
+        def _cleanup():
             cap.release()
+
+        return _read, _probe, _cleanup, nominal_fps, None
+
+    # ---- 探测实际帧率（按帧时间戳计算） ----
+    # 探测只取时间戳（不做 align/numpy），开销远小于正式处理。
+    _, probe_fn, probe_cleanup, nominal_fps, _ = _open_source()
+    first_ts: Optional[float] = None
+    last_ts: Optional[float] = None
+    probe_count = 0
+    try:
+        while True:
+            ts = probe_fn()
+            if ts is None:
+                break
+            if first_ts is None:
+                first_ts = ts
+            last_ts = ts
+            probe_count += 1
+    finally:
+        probe_cleanup()
+
+    fps = nominal_fps
+    if (
+        probe_count > 2
+        and first_ts is not None
+        and last_ts is not None
+        and last_ts > first_ts
+    ):
+        measured_fps = (probe_count - 1) / (last_ts - first_ts)
+        if 1.0 <= measured_fps <= 240.0:
+            fps = measured_fps
+    logger.info(
+        "腿部模块 [%s] 帧率探测：标称 %.2f fps，实际 %.2f fps，%d 帧",
+        cfg.task_display, nominal_fps, fps, probe_count,
+    )
+
+    read_fn, _, cleanup, _, depth_intrinsics = _open_source()
 
     def _get_3d(x_norm, y_norm, depth_frame):
         if depth_intrinsics is None or depth_frame is None:
@@ -329,6 +422,13 @@ def _process_one_task(
     ready: Dict[str, bool] = {"Left": True, "Right": True}
     last_count_time: Dict[str, float] = {"Left": 0.0, "Right": 0.0}
     amplitudes: Dict[str, List[float]] = {"Left": [], "Right": []}
+    last_lift: Dict[str, float] = {"Left": 0.0, "Right": 0.0}
+
+    # ---- annotated video output ----
+    annotated_video_dir = output_dir / "videos" if output_dir else None
+    video_writer = None
+    annotated_video_path: Optional[Path] = None
+    input_stem = video_path.stem
 
     try:
         frame_idx = 0
@@ -336,10 +436,17 @@ def _process_one_task(
             ret = read_fn()
             if ret is None:
                 break
-            color_image, depth_frame, timestamp = ret
+            color_image, depth_frame, timestamp, is_rgb = ret
             frame_idx += 1
 
-            rgb = cv2.cvtColor(color_image, cv2.COLOR_BGR2RGB)
+            if is_rgb:
+                rgb = (
+                    color_image
+                    if color_image.flags.c_contiguous
+                    else np.ascontiguousarray(color_image)
+                )
+            else:
+                rgb = cv2.cvtColor(color_image, cv2.COLOR_BGR2RGB)
             rgb.flags.writeable = False
             pose_result = pose.process(rgb)
             rgb.flags.writeable = True
@@ -376,6 +483,7 @@ def _process_one_task(
 
                     base = baseline[side] or raw
                     lift = raw - base
+                    last_lift[side] = lift
 
                     if lift > up_th and ready[side]:
                         if timestamp - last_count_time[side] > cfg.debounce:
@@ -390,6 +498,60 @@ def _process_one_task(
                     if lift < down_th:
                         ready[side] = True
 
+            # ---- annotated video ----
+            if video_writer is None and annotated_video_dir is not None:
+                video_writer = AnnotatedVideoWriter(
+                    annotated_video_dir / f"{input_stem}_{cfg.task_id}_annotated.webm",
+                    fps,
+                    (color_image.shape[1], color_image.shape[0]),
+                )
+                if video_writer.opened:
+                    annotated_video_path = video_writer.path
+            if video_writer is not None and video_writer.opened:
+                annotated = (
+                    color_image
+                    if not is_rgb
+                    else cv2.cvtColor(color_image, cv2.COLOR_RGB2BGR)
+                )
+                if pose_result.pose_landmarks:
+                    highlight = [
+                        _side_indices(side)[cfg.target_landmark]
+                        for side in ("Left", "Right")
+                    ]
+                    draw_leg_skeleton(
+                        annotated,
+                        pose_result.pose_landmarks.landmark,
+                        highlight=highlight,
+                    )
+                put_text_block(
+                    annotated,
+                    [
+                        f"Leg Motion: {cfg.task_id} (MDS-UPDRS {cfg.mds_item})",
+                        f"Frame: {frame_idx}  Time: {timestamp:.3f}s",
+                    ],
+                )
+                for side in ("Left", "Right"):
+                    is_left = side == "Left"
+                    put_text_block(
+                        annotated,
+                        [
+                            f"{side}: {count[side]}/{required_actions}",
+                            f"lift {last_lift[side]:.3f}",
+                            "READY" if ready[side] else "LIFTED",
+                        ],
+                        origin=(
+                            (12, 108)
+                            if is_left
+                            else (color_image.shape[1] - 220, 108)
+                        ),
+                        scale=0.55,
+                        status_index=2,
+                        status_color=(
+                            (0, 220, 0) if ready[side] else (0, 0, 255)
+                        ),
+                    )
+                video_writer.write(annotated)
+
             if progress and frame_idx % 30 == 0:
                 progress(0.5, f"[{cfg.task_display}] 已处理 {frame_idx} 帧...")
 
@@ -401,10 +563,7 @@ def _process_one_task(
             sl = side.lower()
             pa = _analyze_pauses(records[side], cfg.pause_threshold, cfg.freeze_threshold)
             sp = _analyze_speed(records[side])
-            am = _analyze_amplitude(
-                amplitudes.get(side, []),
-                amplitudes[side][0] if amplitudes[side] else None,
-            )
+            am = _analyze_amplitude(amplitudes.get(side, []))
             score, reasons = _mds_updrs_score(pa, sp, am)
             per_side[sl] = _build_task_result(
                 score, reasons, count[side], required_actions,
@@ -418,9 +577,11 @@ def _process_one_task(
 
         quality = {"total_frames": frame_idx, "fps": fps}
 
-        return per_side, warnings, quality
+        return per_side, warnings, quality, annotated_video_path
 
     finally:
+        if video_writer is not None:
+            video_writer.close()
         cleanup()
         pose.close()
 
@@ -455,8 +616,8 @@ class LegMotionModule(InferenceModule):
             up_th_3d=0.02,
             down_th_3d=0.005,
             debounce=0.1,
-            pause_threshold=0.6,
-            freeze_threshold=1.5,
+            pause_threshold=1.5,
+            freeze_threshold=3.0,
             calibration_frames=30,
         ),
         LEG_AGILITY: dict(
@@ -468,13 +629,24 @@ class LegMotionModule(InferenceModule):
             up_th_3d=0.05,
             down_th_3d=0.01,
             debounce=0.1,
-            pause_threshold=0.6,
-            freeze_threshold=1.5,
+            pause_threshold=1.5,
+            freeze_threshold=3.0,
             calibration_frames=30,
         ),
     }
 
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _output_dir(request: InferenceRequest) -> Path:
+        configured = request.parameters.get("output_dir")
+        if configured:
+            return Path(str(configured)).resolve()
+        return (
+            Path(tempfile.gettempdir())
+            / "medvision_leg_motion"
+            / request.assessment_id
+        ).resolve()
 
     def descriptor(self) -> ModelModuleDescriptor:
         return ModelModuleDescriptor(
@@ -567,6 +739,10 @@ class LegMotionModule(InferenceModule):
         if not request.inputs:
             raise ModuleUnavailableError("没有可用的输入槽。")
 
+        output_dir = self._output_dir(request)
+        output_artifacts: List[str] = []
+        annotated_videos: List[Dict[str, Any]] = []
+
         pose_conf = (
             self.MIN_DETECTION_CONFIDENCE,
             self.MIN_TRACKING_CONFIDENCE,
@@ -622,13 +798,24 @@ class LegMotionModule(InferenceModule):
             logger.info(
                 "腿部模块 [%s] 开始处理: %s", task_kwargs["task_display"], video_path,
             )
-            per_side, warnings, quality = _process_one_task(
+            per_side, warnings, quality, annotated_video = _process_one_task(
                 cfg, video_path, self.REQUIRED_ACTIONS, pose_conf,
                 progress=progress,
+                output_dir=output_dir,
             )
             all_tasks[task_id] = per_side
             all_warnings.extend(warnings)
             all_quality[task_id] = quality
+            if annotated_video is not None and annotated_video.is_file():
+                annotated_videos.append(
+                    {
+                        "segment_id": task_id,
+                        "label": task_kwargs["task_display"],
+                        "artifact_index": len(output_artifacts),
+                        "media_type": "video/webm",
+                    }
+                )
+                output_artifacts.append(str(annotated_video.resolve()))
             logger.info(
                 "腿部模块 [%s] 处理完成", task_kwargs["task_display"],
             )
@@ -666,7 +853,16 @@ class LegMotionModule(InferenceModule):
             quality=all_quality,
             metrics=metrics,
             scores=scores,
-            result_data={"tasks": all_tasks},
-            output_artifacts=[],
+            result_data={
+                "tasks": all_tasks,
+                "visualization": {
+                    "type": "annotated_pose_video",
+                    "annotated_videos": annotated_videos,
+                    "availability": (
+                        "ready" if annotated_videos else "unavailable"
+                    ),
+                },
+            },
+            output_artifacts=output_artifacts,
             warnings=all_warnings,
         )

@@ -139,6 +139,7 @@ export const api = {
     projectId: string,
     segments: VideoSegment[],
     walkDistanceM?: number,
+    cropRegion?: [number, number, number, number],
   ) =>
     request<SegmentationProject>(
       `/segmentation-projects/${projectId}/segments`,
@@ -147,9 +148,22 @@ export const api = {
         body: JSON.stringify({
           segments,
           walk_distance_m: walkDistanceM,
+          crop_region: cropRegion,
         }),
       },
     ),
+  deleteProject: (projectId: string) =>
+    request<void>(`/segmentation-projects/${projectId}`, {
+      method: "DELETE",
+    }),
+  clearAssessmentOutputs: (assessmentId: string) =>
+    request<void>(`/assessments/${assessmentId}/outputs`, {
+      method: "DELETE",
+    }),
+  deleteAssessment: (assessmentId: string) =>
+    request<void>(`/assessments/${assessmentId}`, {
+      method: "DELETE",
+    }),
 };
 
 export function assessmentOutputUrl(
