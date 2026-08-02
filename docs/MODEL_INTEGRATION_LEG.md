@@ -14,7 +14,7 @@
 
 ## 输入协议
 
-- 支持的数据类型：`realsense_bag`、`video`（常见格式如 .avi、.mp4、.mov、.mkv）
+- 支持的数据类型：`realsense_bag`、`video`（.bag、.avi、.mp4、.mov、.mkv、.webm、.m4v）
 - 动作/采集任务：
   - 脚趾拍地（MDS-UPDRS 3.7）：患者坐姿，脚跟固定在地面，脚尖抬起再拍下，重复 10 次
   - 抬腿灵活性（MDS-UPDRS 3.8）：患者坐姿，整只脚从地面抬起再跺下，尽可能高、尽可能快，重复 10 次

@@ -209,9 +209,15 @@ class AssessmentRepository:
         """删除评估的推理产物（标注视频、CSV 等），保留评估记录与评分。
 
         outputs 目录整体删除；各模块 result.output_artifacts 清空，
-        使输出端点在文件缺失时自然返回 404。
+        同时将可视化产物标记为不可用，避免前端继续请求已删除的视频。
         """
         assessment = self.get(assessment_id)
+        if any(
+            run.status in {"queued", "running"}
+            for run in assessment.module_runs.values()
+        ):
+            raise RuntimeError("评估仍在运行，不能清理推理产物。")
+
         outputs_dir = (
             self.root
             / assessment.patient_id
@@ -229,12 +235,28 @@ class AssessmentRepository:
         now = datetime.now(timezone.utc)
         updated_runs: dict[str, ModuleRunRecord] = {}
         for module_id, run in assessment.module_runs.items():
-            if run.result and run.result.output_artifacts:
+            if run.result:
+                result_data = dict(run.result.result_data)
+                visualization = result_data.get("visualization")
+                if isinstance(visualization, dict):
+                    result_data["visualization"] = {
+                        **visualization,
+                        "annotated_videos": [],
+                        "availability": "unavailable",
+                    }
                 new_result = run.result.model_copy(
-                    update={"output_artifacts": []}
+                    update={
+                        "output_artifacts": [],
+                        "result_data": result_data,
+                    }
                 )
                 run = run.model_copy(
                     update={"result": new_result, "updated_at": now}
+                )
+                self.save_module_run(
+                    assessment.patient_id,
+                    assessment.id,
+                    run,
                 )
             updated_runs[module_id] = run
 

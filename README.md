@@ -62,6 +62,24 @@ cd System
 npm run setup:frontend
 ```
 
+### Tauri 桌面构建（Windows）
+
+桌面开发与打包还需要 Rust（MSVC 工具链）、Microsoft C++ Build Tools
+（勾选“使用 C++ 的桌面开发”）和 WebView2。安装方式以
+[Tauri 2 Windows 前置要求](https://v2.tauri.app/zh-cn/start/prerequisites/)为准。
+
+```powershell
+# 先确认 Rust/Cargo 已进入 PATH
+cargo --version
+
+# 构建 NSIS 桌面安装包
+cd System
+npm run build:desktop
+```
+
+若提示 `failed to run cargo metadata: program not found`，说明当前终端尚未安装
+Rust，或安装后尚未重启终端使 `cargo` 进入 `PATH`；这不是 Vue/Tauri 源码错误。
+
 ## 浏览器开发
 
 **虚拟环境版本：**
@@ -100,12 +118,14 @@ npm run dev:web:system
 
 ```powershell
 # 后端测试
-cd System\server
-python -m pytest tests/ -v
+cd System
+npm run test:server
 
 # 前端类型检查
-cd System
 npm run typecheck
+
+# Tauri 桌面打包（需先满足上面的 Windows 前置要求）
+npm run build:desktop
 ```
 
 > 在 Python 3.9 等旧环境（scikit-learn < 1.8.0）中，`test_overall_posture_walk17_inference_contract` 会自动跳过并注明原因（walk17 模型 artifact 需要 sklearn ≥ 1.8.0），其余测试不受影响。
@@ -121,6 +141,7 @@ npm run typecheck
 | `server/tests/test_inference.py` | 直接调用推理模块（需要 .bag 文件，不依赖服务） |
 | `server/tests/test_overall_posture.py` | 整体姿态 walk17 特征契约与推理链路 |
 | `server/tests/test_scoring_metrics.py` | 停顿/速度/幅度评分指标 + 轮替防抖状态机 |
+| `server/tests/test_module_interfaces.py` | 手腿视频格式、手部分段任务与裁剪参数边界 |
 | `server/tests/test_cleanup.py` | 硬链接去重、DELETE 清理、本地引用预检 |
 
 ## 数据与存储

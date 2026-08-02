@@ -46,8 +46,10 @@ class VideoSegmentUpdate(BaseModel):
                 )
         if self.crop_region is not None:
             x, y, w, h = self.crop_region
-            if min(x, y, w, h) < 0:
-                raise ValueError("crop_region 不允许负值")
+            if x < 0 or y < 0:
+                raise ValueError("crop_region 的 x/y 不允许负值")
+            if w <= 0 or h <= 0:
+                raise ValueError("crop_region 的宽度和高度必须大于 0")
         return self
 
 

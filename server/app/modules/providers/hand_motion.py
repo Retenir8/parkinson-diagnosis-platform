@@ -3,8 +3,8 @@
 ==============================================
 集成三个手部动作评分器：
 - 手指对指 (Finger Opposition) — MDS-UPDRS 3.4
-- 手掌轮替 (Hand Alternation) — MDS-UPDRS 3.5
-- 握拳     (Fist Clenching)  — MDS-UPDRS 3.6
+- 手掌轮替 (Hand Alternation) — MDS-UPDRS 3.6
+- 握拳     (Fist Clenching)  — MDS-UPDRS 3.5
 
 MediaPipe Hands 关键点只提取一次，三个评分器共享。
 无头模式：不产生 OpenCV 窗口，生成 VP8/WebM 标注视频作为模块输出。
@@ -50,6 +50,12 @@ logger = logging.getLogger(__name__)
 # Sentinel & constants
 # ---------------------------------------------------------------------------
 INVALID_SIGNAL_SENTINEL = 900.0
+HAND_TASK_TYPES = frozenset(
+    {"finger_opposition", "hand_alternation", "fist_clenching"}
+)
+VIDEO_SUFFIXES = frozenset(
+    {".bag", ".avi", ".mp4", ".mov", ".mkv", ".webm", ".m4v"}
+)
 
 SPEED_THRESHOLDS_DUIZHI = [0.9, 0.8, 0.6, 0.4]
 SPEED_THRESHOLDS_LUNTI  = [0.9, 0.65, 0.5, 0.3]
@@ -504,8 +510,11 @@ def _parse_segment_manifest(path: Path) -> Tuple[List[Dict[str, Any]], Optional[
                 ):
                     raise ValueError("crop_region 必须是 [x, y, w, h] 数组")
                 values = tuple(int(v) for v in raw_crop)
-                if min(values) < 0:
-                    raise ValueError("crop_region 不允许负值")
+                x, y, w, h = values
+                if x < 0 or y < 0:
+                    raise ValueError("crop_region 的 x/y 不允许负值")
+                if w <= 0 or h <= 0:
+                    raise ValueError("crop_region 的宽度和高度必须大于 0")
                 crop_region = values
             rows = payload.get("segments", [])
         elif isinstance(payload, list):
@@ -534,6 +543,12 @@ def _parse_segment_manifest(path: Path) -> Tuple[List[Dict[str, Any]], Optional[
         task_type = str(raw["task_type"]).strip().lower()
         if not segment_id or not label or not task_type:
             raise ValueError(f"第 {index} 个分段的 ID/label/task_type 为空")
+        if task_type not in HAND_TASK_TYPES:
+            supported = "、".join(sorted(HAND_TASK_TYPES))
+            raise ValueError(
+                f"第 {index} 个分段的 task_type 不受手部模块支持："
+                f"{task_type}；可选值：{supported}"
+            )
         if segment_id in ids:
             raise ValueError(f"segment_id 重复：{segment_id}")
         ids.add(segment_id)
@@ -579,7 +594,7 @@ class HandMotionModule(InferenceModule):
     """Hand motion analysis: finger opposition, alternation, fist clenching.
 
     MediaPipe Hands runs once; all three scorers share the same landmarks.
-    No OpenCV GUI, no annotated video output.
+    No OpenCV GUI; annotated video is written as a module output.
     """
 
     # ===== 通用任务参数 =====
@@ -669,7 +684,7 @@ class HandMotionModule(InferenceModule):
             category="hand",
             description=(
                 "基于 MediaPipe Hands 的手部三任务评分："
-                "手指对指（MDS-UPDRS 3.4）、手掌轮替（3.5）、握拳（3.6）。"
+                "手指对指（MDS-UPDRS 3.4）、手掌轮替（3.6）、握拳（3.5）。"
             ),
             status="ready",
             status_detail=(
@@ -723,7 +738,7 @@ class HandMotionModule(InferenceModule):
         for a in video_files:
             if not a.path.exists():
                 issues.append(f"文件不存在：{a.path}")
-            elif a.path.suffix.lower() not in (".bag", ".avi", ".mp4", ".mov", ".mkv"):
+            elif a.path.suffix.lower() not in VIDEO_SUFFIXES:
                 issues.append(f"不支持的视频格式：{a.path.suffix}")
 
         try:
@@ -1370,6 +1385,15 @@ class HandMotionModule(InferenceModule):
                 # 裁剪区域仅用于检测与评分；标注视频保留完整画面
                 if crop_region:
                     cx, cy, cw, ch = crop_region
+                    frame_h, frame_w = full_color.shape[:2]
+                    if cx >= frame_w or cy >= frame_h:
+                        raise ValueError(
+                            "crop_region 的起点超出视频画面："
+                            f"区域=({cx}, {cy}, {cw}, {ch})，"
+                            f"画面={frame_w}x{frame_h}"
+                        )
+                    cw = min(cw, frame_w - cx)
+                    ch = min(ch, frame_h - cy)
                     color_image = full_color[cy:cy + ch, cx:cx + cw]
                 else:
                     cx = cy = 0

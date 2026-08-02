@@ -41,6 +41,9 @@ logger = logging.getLogger(__name__)
 
 SPEED_THRESHOLDS = [0.9, 0.8, 0.6, 0.4]
 _INCOMPLETE_FLAG = "INCOMPLETE"
+VIDEO_SUFFIXES = frozenset(
+    {".bag", ".avi", ".mp4", ".mov", ".mkv", ".webm", ".m4v"}
+)
 
 # MediaPipe Pose landmark indices
 NOSE = 0
@@ -714,7 +717,7 @@ class LegMotionModule(InferenceModule):
             for a in artifacts:
                 if not a.path.exists():
                     issues.append(f"文件不存在：{a.path}")
-                elif a.path.suffix.lower() not in (".bag", ".avi", ".mp4", ".mov", ".mkv"):
+                elif a.path.suffix.lower() not in VIDEO_SUFFIXES:
                     issues.append(f"不支持的视频格式：{a.path.suffix}")
 
         try:

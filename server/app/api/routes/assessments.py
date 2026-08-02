@@ -254,7 +254,8 @@ def get_module_output(
     return FileResponse(
         path,
         media_type=media_type,
-        headers={"Content-Disposition": f'inline; filename="{path.name}"'},
+        filename=path.name,
+        content_disposition_type="inline",
     )
 
 
@@ -273,6 +274,11 @@ def clear_assessment_outputs(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="未找到评估任务。",
+        ) from error
+    except RuntimeError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(error),
         ) from error
 
 

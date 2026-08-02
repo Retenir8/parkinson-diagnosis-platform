@@ -185,6 +185,18 @@ class TestClearOutputs:
             ModuleResult(
                 module_id="hand-motion",
                 summary="完成",
+                result_data={
+                    "visualization": {
+                        "type": "annotated_pose_video",
+                        "availability": "ready",
+                        "annotated_videos": [
+                            {
+                                "artifact_index": 0,
+                                "media_type": "video/webm",
+                            }
+                        ],
+                    }
+                },
                 output_artifacts=[str(video)],
             ),
         )
@@ -195,7 +207,45 @@ class TestClearOutputs:
         run = updated.module_runs["hand-motion"]
         assert run.result is not None
         assert run.result.output_artifacts == []
+        visualization = run.result.result_data["visualization"]
+        assert visualization["availability"] == "unavailable"
+        assert visualization["annotated_videos"] == []
+        stored_run = json.loads(
+            (
+                outputs.parent.parent
+                / "module_runs"
+                / "hand-motion.json"
+            ).read_text(encoding="utf-8")
+        )
+        assert stored_run["result"]["output_artifacts"] == []
+        stored_visualization = stored_run["result"]["result_data"][
+            "visualization"
+        ]
+        assert stored_visualization["availability"] == "unavailable"
         assert "已清理" in updated.status_detail
+
+    def test_clear_outputs_rejects_active_assessment(self, tmp_path: Path):
+        data_dir = tmp_path / "data"
+        repo = AssessmentRepository(data_dir)
+        assessment = repo.create(
+            AssessmentCreate(
+                patient_id="p1",
+                module_inputs={"hand-motion": {"hand_video": ["a1"]}},
+            ),
+            status_detail="排队中",
+            module_runs={
+                "hand-motion": ModuleRunRecord(
+                    module_id="hand-motion",
+                    status="running",
+                    status_detail="推理中",
+                    inputs={"hand_video": ["a1"]},
+                    updated_at=datetime.now(timezone.utc),
+                )
+            },
+        )
+
+        with pytest.raises(RuntimeError, match="仍在运行"):
+            repo.clear_outputs(assessment.id)
 
     def test_delete_assessment_removes_record_and_outputs(self, tmp_path: Path):
         data_dir = tmp_path / "data"

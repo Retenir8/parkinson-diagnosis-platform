@@ -127,7 +127,9 @@ def test_patient_artifact_and_assessment_flow(
                 summary="不应写入整体姿态结果槽",
             ),
         )
-    output_file = tmp_path / "data" / "patients" / patient["id"] / "result.csv"
+    output_file = (
+        tmp_path / "data" / "patients" / patient["id"] / "匿名步行结果.csv"
+    )
     output_file.write_text("metric,value\nSP_U,1.0\n", encoding="utf-8")
     repository.store_module_result(
         assessment["id"],
@@ -167,6 +169,9 @@ def test_patient_artifact_and_assessment_flow(
     )
     assert output_response.status_code == 200
     assert output_response.content.startswith(b"metric,value")
+    assert "filename*=utf-8''" in output_response.headers[
+        "content-disposition"
+    ].lower()
 
     reports_response = client.get("/api/v1/reports")
     assert reports_response.status_code == 200

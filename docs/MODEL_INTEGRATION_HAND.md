@@ -14,9 +14,9 @@
 
 ## 输入协议
 
-- 支持的数据类型：`realsense_bag`、`video`（常见格式如 .avi、.mp4、.mov、.mkv）
+- 支持的数据类型：`realsense_bag`、`video`（.bag、.avi、.mp4、.mov、.mkv、.webm、.m4v）
 - 输入槽：
-  - `hand_video`（必需）：单段视频包含三个手部动作——手指对指（MDS-UPDRS 3.4）、手掌轮替（3.5）、握拳（3.6）。患者面朝相机，双手在胸前依次完成各任务。
+  - `hand_video`（必需）：单段视频包含三个手部动作——手指对指（MDS-UPDRS 3.4）、手掌轮替（3.6）、握拳（3.5）。患者面朝相机，双手在胸前依次完成各任务。
   - `segment_manifest`（可选）：`segments.csv` 或 `segments.json`，启用分段模式。
 - 分段模式：
   - 清单格式固定为 `segment_id,label,task_type,start_s,end_s`，时间以原始文件第一帧为 0 秒，片段不允许重叠；

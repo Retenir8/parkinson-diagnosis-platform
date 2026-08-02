@@ -13,7 +13,7 @@ app = FastAPI(
     version=settings.version,
     description=(
         "患者本地档案、评估资料和可插拔模型模块的本地 API。"
-        "当前框架不会执行尚未确认的模型或评分逻辑。"
+        "系统仅执行已注册且状态就绪的模型；未确认模块不会进入推理。"
     ),
 )
 app.add_middleware(
