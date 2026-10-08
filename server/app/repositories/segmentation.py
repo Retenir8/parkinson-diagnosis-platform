@@ -182,8 +182,13 @@ class SegmentationRepository:
                     "segment_id",
                     "label",
                     "task_type",
+                    "side",
                     "start_s",
                     "end_s",
+                    "crop_x",
+                    "crop_y",
+                    "crop_w",
+                    "crop_h",
                 ),
             )
             writer.writeheader()
@@ -193,6 +198,10 @@ class SegmentationRepository:
                         **segment.model_dump(),
                         "start_s": round(segment.start_s, 3),
                         "end_s": round(segment.end_s, 3),
+                        "crop_x": crop_region[0] if crop_region else "",
+                        "crop_y": crop_region[1] if crop_region else "",
+                        "crop_w": crop_region[2] if crop_region else "",
+                        "crop_h": crop_region[3] if crop_region else "",
                     }
                 )
         os.replace(csv_temp_path, csv_path)

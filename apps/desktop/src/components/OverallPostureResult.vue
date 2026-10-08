@@ -15,7 +15,6 @@ import {
   formatMetric,
   formatRate,
   GAIT_FEATURES,
-  severityFromClass,
 } from "@/utils/clinicalMetrics";
 
 interface SegmentResult {
@@ -82,9 +81,6 @@ const videoUrl = computed(() =>
       )
     : "",
 );
-const severity = computed(() =>
-  severityFromClass(props.result.scores.np3gait_class),
-);
 const probabilities = computed(() =>
   selectedSegment.value?.prediction?.probabilities ?? {},
 );
@@ -146,53 +142,37 @@ watch(
           <p>新执行的整体姿态任务会生成；旧任务仍可查看已保存的指标。</p>
         </div>
 
-        <div v-if="selectedSegment" class="live-metric-strip">
-          <div>
-            <span><Activity :size="13" /> 姿态检出率</span>
-            <strong>{{ formatRate(selectedSegment.quality?.pose_detection_rate) }}</strong>
-          </div>
-          <div>
-            <span><ScanLine :size="13" /> 有效深度率</span>
-            <strong>{{ formatRate(selectedSegment.quality?.valid_depth_rate) }}</strong>
-          </div>
-          <div>
-            <span><Footprints :size="13" /> 片段时长</span>
-            <strong>{{ formatMetric(selectedSegment.duration_s, 2) }} s</strong>
-          </div>
-          <div>
-            <span><CircleAlert :size="13" /> 缺失特征</span>
-            <strong>{{ selectedSegment.quality?.missing_feature_count ?? "—" }}</strong>
-          </div>
-        </div>
       </section>
 
       <aside class="posture-score-panel">
-        <div class="severity-card" :class="`severity-${severity.code}`">
-          <span>研究性分层结果</span>
-          <strong>{{ severity.label }}</strong>
-          <small>walk17 类别 {{ result.scores.np3gait_class ?? "—" }}</small>
-        </div>
-
+        <section v-if="selectedSegment" class="posture-side-metrics">
+          <header><Activity :size="17" /><strong>当前片段信息</strong></header>
+          <dl>
+            <div><dt>姿态检出率</dt><dd>{{ formatRate(selectedSegment.quality?.pose_detection_rate) }}</dd></div>
+            <div><dt>有效深度率</dt><dd>{{ formatRate(selectedSegment.quality?.valid_depth_rate) }}</dd></div>
+            <div><dt>片段时长</dt><dd>{{ formatMetric(selectedSegment.duration_s, 2) }} s</dd></div>
+            <div><dt>缺失特征</dt><dd>{{ selectedSegment.quality?.missing_feature_count ?? "—" }}</dd></div>
+          </dl>
+        </section>
         <section class="probability-panel">
           <header>
             <Gauge :size="17" />
             <strong>本片段分类概率</strong>
           </header>
-          <div
-            v-for="classId in ['0', '1', '2']"
-            :key="classId"
-            class="probability-row"
-          >
-            <div>
-              <span>{{ probabilityLabels[classId] }}</span>
-              <strong>{{ formatRate(probabilities[classId]) }}</strong>
+          <div class="probability-chart" aria-label="0、1、2 分类概率柱状图">
+            <div class="chart-y-axis">
+              <span v-for="tick in [100, 75, 50, 25, 0]" :key="tick">{{ tick }}%</span>
             </div>
-            <div class="probability-track">
-              <span
-                :style="{
-                  width: `${Math.max(0, Math.min(100, Number(probabilities[classId] ?? 0) * 100))}%`,
-                }"
-              />
+            <div class="chart-plot">
+              <i v-for="tick in [100, 75, 50, 25, 0]" :key="tick" :style="{ bottom: `${tick}%` }" />
+              <div v-for="classId in ['0', '1', '2']" :key="classId" class="chart-bar-group">
+                <div class="chart-bar-area">
+                  <div class="chart-bar" :style="{ height: `${Math.max(0, Math.min(100, Number(probabilities[classId] ?? 0) * 100))}%` }">
+                    <strong>{{ formatRate(probabilities[classId]) }}</strong>
+                  </div>
+                </div>
+                <span><b>{{ classId }}</b>{{ probabilityLabels[classId] }}</span>
+              </div>
             </div>
           </div>
         </section>

@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+import csv
+import json
 import math
 import logging
 import tempfile
@@ -28,7 +30,6 @@ from app.modules.mediapipe_compat import prepare_legacy_solutions
 from app.modules.video_annotation import (
     AnnotatedVideoWriter,
     draw_leg_skeleton,
-    put_text_block,
 )
 from app.schemas.modules import (
     InputSlotDescriptor,
@@ -41,9 +42,102 @@ logger = logging.getLogger(__name__)
 
 SPEED_THRESHOLDS = [0.9, 0.8, 0.6, 0.4]
 _INCOMPLETE_FLAG = "INCOMPLETE"
+LEG_TASK_TYPES = frozenset({"toe_tapping", "leg_agility"})
+
+
+def _parse_leg_segment_manifest(path: Path) -> Tuple[List[Dict[str, Any]], Optional[tuple]]:
+    """读取腿部合并视频的动作×侧别分段清单。"""
+    crop_region = None
+    if path.suffix.lower() == ".json":
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+        rows = payload.get("segments", []) if isinstance(payload, dict) else payload
+        raw_crop = payload.get("crop_region") if isinstance(payload, dict) else None
+        if raw_crop is not None:
+            if not isinstance(raw_crop, (list, tuple)) or len(raw_crop) != 4:
+                raise ValueError("crop_region 必须是 [x, y, w, h]")
+            crop_region = tuple(int(value) for value in raw_crop)
+    else:
+        with path.open("r", newline="", encoding="utf-8-sig") as handle:
+            rows = list(csv.DictReader(handle))
+    if not isinstance(rows, list):
+        raise ValueError("segments 必须是数组")
+    segments: List[Dict[str, Any]] = []
+    for index, row in enumerate(rows, start=1):
+        if not isinstance(row, dict):
+            raise ValueError(f"第 {index} 个分段不是对象")
+        task_type = str(row.get("task_type", "")).strip().lower()
+        side = str(row.get("side", "")).strip().lower()
+        if task_type not in LEG_TASK_TYPES:
+            continue
+        if side not in {"left", "right"}:
+            raise ValueError(f"第 {index} 个腿部分段必须选择 left/right")
+        start_s = float(row.get("start_s", -1))
+        end_s = float(row.get("end_s", -1))
+        if start_s < 0 or end_s <= start_s:
+            raise ValueError(f"第 {index} 个腿部分段时间范围无效")
+        segments.append({
+            "segment_id": str(row.get("segment_id", index)).strip(),
+            "label": str(row.get("label", task_type)).strip(),
+            "task_type": task_type,
+            "side": side,
+            "start_s": start_s,
+            "end_s": end_s,
+        })
+    if not segments:
+        raise ValueError("分段清单中没有腿部动作片段")
+    return sorted(segments, key=lambda item: item["start_s"]), crop_region
 VIDEO_SUFFIXES = frozenset(
     {".bag", ".avi", ".mp4", ".mov", ".mkv", ".webm", ".m4v"}
 )
+
+
+def _parse_crop_manifest(
+    path: Path, expected_task: str
+) -> tuple[int, int, int, int]:
+    """Read a task-specific spatial ROI from a segmentation manifest."""
+    crop: tuple[int, int, int, int] | None = None
+    task_types: set[str] = set()
+    if path.suffix.lower() == ".json":
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+        if not isinstance(payload, dict):
+            raise ValueError("腿部裁剪清单必须是分割页生成的 JSON 对象")
+        raw_crop = payload.get("crop_region")
+        rows = payload.get("segments", [])
+        if isinstance(rows, list):
+            task_types = {
+                str(row.get("task_type", "")).strip().lower()
+                for row in rows
+                if isinstance(row, dict)
+            }
+        if raw_crop is not None:
+            if not isinstance(raw_crop, (list, tuple)) or len(raw_crop) != 4:
+                raise ValueError("crop_region 必须是 [x, y, w, h]")
+            crop = tuple(int(value) for value in raw_crop)
+    else:
+        with path.open("r", newline="", encoding="utf-8-sig") as handle:
+            rows = list(csv.DictReader(handle))
+        task_types = {
+            str(row.get("task_type", "")).strip().lower() for row in rows
+        }
+        crop_fields = ("crop_x", "crop_y", "crop_w", "crop_h")
+        crops = {
+            tuple(int(row[field]) for field in crop_fields)
+            for row in rows
+            if all(row.get(field) not in (None, "") for field in crop_fields)
+        }
+        if len(crops) > 1:
+            raise ValueError("CSV 中各片段的裁剪区域不一致")
+        if crops:
+            crop = next(iter(crops))
+
+    if expected_task not in task_types:
+        raise ValueError(f"清单中没有 task_type={expected_task} 的片段")
+    if crop is None:
+        raise ValueError("清单中没有保存画面裁剪区域")
+    x, y, width, height = crop
+    if x < 0 or y < 0 or width <= 0 or height <= 0:
+        raise ValueError("裁剪区域必须满足 x/y≥0 且宽高>0")
+    return crop
 
 # MediaPipe Pose landmark indices
 NOSE = 0
@@ -233,6 +327,9 @@ def _process_one_task(
     pose_conf: Tuple[float, float, int],
     progress: ProgressCallback | None = None,
     output_dir: Path | None = None,
+    target_side: str | None = None,
+    segment_start_s: float | None = None,
+    segment_end_s: float | None = None,
 ) -> Tuple[Dict, List[str], Dict, Optional[Path]]:
     """Process one video for one task.
 
@@ -426,6 +523,7 @@ def _process_one_task(
     last_count_time: Dict[str, float] = {"Left": 0.0, "Right": 0.0}
     amplitudes: Dict[str, List[float]] = {"Left": [], "Right": []}
     last_lift: Dict[str, float] = {"Left": 0.0, "Right": 0.0}
+    telemetry: List[Dict[str, Any]] = []
 
     # ---- annotated video output ----
     annotated_video_dir = output_dir / "videos" if output_dir else None
@@ -435,12 +533,22 @@ def _process_one_task(
 
     try:
         frame_idx = 0
+        processed_frame_idx = 0
+        first_timestamp: Optional[float] = None
         while True:
             ret = read_fn()
             if ret is None:
                 break
             color_image, depth_frame, timestamp, is_rgb = ret
             frame_idx += 1
+            if first_timestamp is None:
+                first_timestamp = timestamp
+            source_time = timestamp - first_timestamp
+            if segment_start_s is not None and source_time < segment_start_s:
+                continue
+            if segment_end_s is not None and source_time > segment_end_s:
+                break
+            processed_frame_idx += 1
 
             if is_rgb:
                 rgb = (
@@ -474,7 +582,7 @@ def _process_one_task(
                     down_th = cfg.down_th_2d
 
                     # dynamic baseline calibration
-                    if frame_idx <= cfg.calibration_frames:
+                    if processed_frame_idx <= cfg.calibration_frames:
                         baseline_samples[side].append(raw)
                         if len(baseline_samples[side]) >= 10:
                             s = sorted(baseline_samples[side])
@@ -504,7 +612,7 @@ def _process_one_task(
             # ---- annotated video ----
             if video_writer is None and annotated_video_dir is not None:
                 video_writer = AnnotatedVideoWriter(
-                    annotated_video_dir / f"{input_stem}_{cfg.task_id}_annotated.webm",
+                    annotated_video_dir / f"{input_stem}_{cfg.task_id}{f'_{target_side}' if target_side else ''}_annotated.webm",
                     fps,
                     (color_image.shape[1], color_image.shape[0]),
                 )
@@ -520,43 +628,31 @@ def _process_one_task(
                     highlight = [
                         _side_indices(side)[cfg.target_landmark]
                         for side in ("Left", "Right")
+                        if target_side is None or side.lower() == target_side
                     ]
                     draw_leg_skeleton(
                         annotated,
                         pose_result.pose_landmarks.landmark,
                         highlight=highlight,
                     )
-                put_text_block(
-                    annotated,
-                    [
-                        f"Leg Motion: {cfg.task_id} (MDS-UPDRS {cfg.mds_item})",
-                        f"Frame: {frame_idx}  Time: {timestamp:.3f}s",
-                    ],
-                )
-                for side in ("Left", "Right"):
-                    is_left = side == "Left"
-                    put_text_block(
-                        annotated,
-                        [
-                            f"{side}: {count[side]}/{required_actions}",
-                            f"lift {last_lift[side]:.3f}",
-                            "READY" if ready[side] else "LIFTED",
-                        ],
-                        origin=(
-                            (12, 108)
-                            if is_left
-                            else (color_image.shape[1] - 220, 108)
-                        ),
-                        scale=0.55,
-                        status_index=2,
-                        status_color=(
-                            (0, 220, 0) if ready[side] else (0, 0, 255)
-                        ),
-                    )
+                # 仅保留腿部骨架与目标点。计数、抬起状态和评分在
+                # 播放器侧栏显示，不再覆盖视频主体。
+                telemetry.append({
+                    "frame_index": processed_frame_idx,
+                    "time_s": max(0.0, source_time - float(segment_start_s or 0.0)),
+                    "sides": {
+                        side.lower(): {
+                            "count": count[side],
+                            "lift": last_lift[side],
+                            "state": "READY" if ready[side] else "LIFTED",
+                        }
+                        for side in ("Left", "Right")
+                    },
+                })
                 video_writer.write(annotated)
 
-            if progress and frame_idx % 30 == 0:
-                progress(0.5, f"[{cfg.task_display}] 已处理 {frame_idx} 帧...")
+            if progress and processed_frame_idx % 30 == 0:
+                progress(0.5, f"[{cfg.task_display}] 已处理 {processed_frame_idx} 帧...")
 
         # ---- scoring ----
         warnings: List[str] = []
@@ -564,6 +660,8 @@ def _process_one_task(
 
         for side in ("Left", "Right"):
             sl = side.lower()
+            if target_side is not None and sl != target_side:
+                continue
             pa = _analyze_pauses(records[side], cfg.pause_threshold, cfg.freeze_threshold)
             sp = _analyze_speed(records[side])
             am = _analyze_amplitude(amplitudes.get(side, []))
@@ -578,7 +676,7 @@ def _process_one_task(
                     f"（需 {required_actions} 次）"
                 )
 
-        quality = {"total_frames": frame_idx, "fps": fps}
+        quality = {"total_frames": processed_frame_idx, "fps": fps, "telemetry": telemetry}
 
         return per_side, warnings, quality, annotated_video_path
 
@@ -658,34 +756,33 @@ class LegMotionModule(InferenceModule):
             category="leg",
             description=(
                 "基于 MediaPipe Pose 的腿部双任务评分："
-                "脚趾拍地（MDS-UPDRS 3.7）和抬腿灵活性（3.8），各需独立视频。"
+                "脚趾拍地（MDS-UPDRS 3.7）和抬腿灵活性（3.8），左右侧分别采集评分。"
             ),
             status="ready",
             status_detail=(
                 "已集成两个腿部动作评分器。"
-                "两个任务分别使用独立视频，各有独立输入槽。"
+                "两个任务均按左侧、右侧独立视频采集与评分。"
             ),
             input_kinds=["realsense_bag", "video"],
             input_slots=[
                 InputSlotDescriptor(
-                    key="toe_tapping_video",
-                    label="脚趾拍地视频 (MDS-UPDRS 3.7)",
+                    key="leg_video",
+                    label="腿部动作完整视频",
                     description=(
-                        "脚趾拍地动作的视频输入（RealSense .bag 或普通视频）。"
-                        "患者坐姿，脚跟固定在地面，脚尖抬起再拍下，重复10次。"
+                        "一段包含左右侧脚趾拍地和抬腿动作的完整视频；"
+                        "通过分段清单指定每段动作与执行侧。"
                     ),
                     accepted_kinds=["realsense_bag", "video"],
                     required=True,
                     multiple=False,
                 ),
                 InputSlotDescriptor(
-                    key="leg_agility_video",
-                    label="抬腿灵活性视频 (MDS-UPDRS 3.8)",
+                    key="leg_segment_manifest",
+                    label="腿部动作分段清单",
                     description=(
-                        "抬腿动作的视频输入（RealSense .bag 或普通视频）。"
-                        "患者坐姿，整只脚从地面抬起再跺下，尽可能高、尽可能快，重复10次。"
+                        "视频分割页导出的 CSV/JSON；每段选择脚趾拍地/抬腿及左侧/右侧。"
                     ),
-                    accepted_kinds=["realsense_bag", "video"],
+                    accepted_kinds=["tabular"],
                     required=True,
                     multiple=False,
                 ),
@@ -703,13 +800,31 @@ class LegMotionModule(InferenceModule):
     def validate(self, request: InferenceRequest) -> list[str]:
         issues: list[str] = []
 
-        # check both slots present
-        for slot_key in ("toe_tapping_video", "leg_agility_video"):
-            if slot_key not in request.inputs or not request.inputs[slot_key]:
-                issues.append(f"缺少必需输入槽：{slot_key}")
-
+        # 新采集使用一段合并视频+动作/侧别清单；旧输入继续兼容。
+        video_slots = {
+            "leg_video",
+            "toe_tapping_left_video", "toe_tapping_right_video",
+            "leg_agility_left_video", "leg_agility_right_video",
+            "toe_tapping_video", "leg_agility_video",
+        }
+        combined_present = bool(request.inputs.get("leg_video"))
+        if combined_present:
+            if not request.inputs.get("leg_segment_manifest"):
+                issues.append("缺少必需输入槽：leg_segment_manifest")
+        else:
+            for task_id in (self.TOE_TAPPING, self.LEG_AGILITY):
+                legacy_present = bool(request.inputs.get(f"{task_id}_video"))
+                for side in ("left", "right"):
+                    side_key = f"{task_id}_{side}_video"
+                    if not legacy_present and not request.inputs.get(side_key):
+                        issues.append(f"缺少必需输入槽：{side_key}")
+        manifest_tasks = {
+            "toe_tapping_manifest": self.TOE_TAPPING,
+            "leg_agility_manifest": self.LEG_AGILITY,
+        }
+        allowed_manifests = set(manifest_tasks) | {"leg_segment_manifest"}
         for slot_key, artifacts in request.inputs.items():
-            if slot_key not in ("toe_tapping_video", "leg_agility_video"):
+            if slot_key not in video_slots | allowed_manifests:
                 issues.append(f"未知输入槽：{slot_key}")
                 continue
             if len(artifacts) > 1:
@@ -717,8 +832,19 @@ class LegMotionModule(InferenceModule):
             for a in artifacts:
                 if not a.path.exists():
                     issues.append(f"文件不存在：{a.path}")
-                elif a.path.suffix.lower() not in VIDEO_SUFFIXES:
+                elif slot_key in video_slots and a.path.suffix.lower() not in VIDEO_SUFFIXES:
                     issues.append(f"不支持的视频格式：{a.path.suffix}")
+                elif slot_key in allowed_manifests:
+                    if a.path.suffix.lower() not in {".csv", ".json"}:
+                        issues.append(f"裁剪清单只支持 CSV/JSON：{a.path.suffix}")
+                    else:
+                        try:
+                            if slot_key == "leg_segment_manifest":
+                                _parse_leg_segment_manifest(a.path)
+                            else:
+                                _parse_crop_manifest(a.path, manifest_tasks[slot_key])
+                        except (OSError, ValueError, json.JSONDecodeError) as error:
+                            issues.append(f"{slot_key} 无效：{error}")
 
         try:
             import pyrealsense2  # noqa: F401
@@ -759,69 +885,118 @@ class LegMotionModule(InferenceModule):
         all_warnings: List[str] = []
         all_quality: Dict[str, Dict] = {}
 
+        combined_video = request.inputs.get("leg_video")
+        combined_segments: List[Dict[str, Any]] = []
+        combined_crop = None
+        if combined_video and request.inputs.get("leg_segment_manifest"):
+            combined_segments, combined_crop = _parse_leg_segment_manifest(
+                request.inputs["leg_segment_manifest"][0].path
+            )
+
         # ---- process each slot independently ----
         for task_id, task_kwargs in self.TASK_CONFIGS.items():
-            slot_key = f"{task_id}_video"
-            if slot_key not in request.inputs or not request.inputs[slot_key]:
-                all_warnings.append(f"缺少 {task_id} 的视频输入，跳过该任务。")
-                # mark as incomplete for both sides
-                for side in ("left", "right"):
-                    all_tasks[task_id][side] = {
-                        "status": _INCOMPLETE_FLAG,
-                        "detected_actions": 0,
-                        "required_actions": self.REQUIRED_ACTIONS,
-                        "score": 0,
-                        "reasons": ["No data: video input missing"],
-                        "pauses": 0,
-                        "speed_ratio": 1.0,
-                        "amplitude_decrease_level": 0,
-                    }
-                continue
-
-            artifact = request.inputs[slot_key][0]
-            video_path = Path(str(artifact.path))
-
-            cfg = _TaskConfig(
-                task_id=task_id,
-                slot_key=slot_key,
-                task_display=task_kwargs["task_display"],
-                mds_item=task_kwargs["mds_item"],
-                target_landmark=task_kwargs["target_landmark"],
-                up_th_2d=task_kwargs["up_th_2d"],
-                down_th_2d=task_kwargs["down_th_2d"],
-                up_th_3d=task_kwargs["up_th_3d"],
-                down_th_3d=task_kwargs["down_th_3d"],
-                debounce=task_kwargs["debounce"],
-                pause_threshold=task_kwargs["pause_threshold"],
-                freeze_threshold=task_kwargs["freeze_threshold"],
-                calibration_frames=task_kwargs["calibration_frames"],
-                crop_region=self.CROP_REGION,
-            )
-
-            logger.info(
-                "腿部模块 [%s] 开始处理: %s", task_kwargs["task_display"], video_path,
-            )
-            per_side, warnings, quality, annotated_video = _process_one_task(
-                cfg, video_path, self.REQUIRED_ACTIONS, pose_conf,
-                progress=progress,
-                output_dir=output_dir,
-            )
-            all_tasks[task_id] = per_side
-            all_warnings.extend(warnings)
-            all_quality[task_id] = quality
-            if annotated_video is not None and annotated_video.is_file():
-                annotated_videos.append(
-                    {
-                        "segment_id": task_id,
-                        "label": task_kwargs["task_display"],
-                        "artifact_index": len(output_artifacts),
-                        "media_type": "video/webm",
-                    }
+            manifest_slot = f"{task_id}_manifest"
+            crop_region = combined_crop
+            if not combined_video:
+                if request.inputs.get(manifest_slot):
+                    crop_region = _parse_crop_manifest(
+                        request.inputs[manifest_slot][0].path, task_id
+                    )
+                else:
+                    all_warnings.append(
+                        f"{task_kwargs['task_display']}未提供裁剪清单，按完整画面评估。"
+                    )
+            elif combined_crop is None:
+                all_warnings.append(
+                    f"{task_kwargs['task_display']}未提供裁剪清单，按完整画面评估。"
                 )
-                output_artifacts.append(str(annotated_video.resolve()))
-            logger.info(
-                "腿部模块 [%s] 处理完成", task_kwargs["task_display"],
-            )
+
+            legacy_slot = f"{task_id}_video"
+            if combined_video:
+                input_specs = [
+                    (
+                        "leg_video", segment["side"], segment["start_s"],
+                        segment["end_s"], segment,
+                    )
+                    for segment in combined_segments
+                    if segment["task_type"] == task_id
+                ]
+            elif request.inputs.get(legacy_slot):
+                input_specs = [(legacy_slot, None, None, None, None)]
+            else:
+                input_specs = [
+                    (f"{task_id}_left_video", "left", None, None, None),
+                    (f"{task_id}_right_video", "right", None, None, None),
+                ]
+
+            for slot_key, target_side, segment_start, segment_end, segment_meta in input_specs:
+                if not request.inputs.get(slot_key):
+                    all_warnings.append(f"缺少 {slot_key}，跳过该侧评分。")
+                    continue
+                video_path = Path(str(request.inputs[slot_key][0].path))
+                cfg = _TaskConfig(
+                    task_id=task_id,
+                    slot_key=slot_key,
+                    task_display=task_kwargs["task_display"],
+                    mds_item=task_kwargs["mds_item"],
+                    target_landmark=task_kwargs["target_landmark"],
+                    up_th_2d=task_kwargs["up_th_2d"],
+                    down_th_2d=task_kwargs["down_th_2d"],
+                    up_th_3d=task_kwargs["up_th_3d"],
+                    down_th_3d=task_kwargs["down_th_3d"],
+                    debounce=task_kwargs["debounce"],
+                    pause_threshold=task_kwargs["pause_threshold"],
+                    freeze_threshold=task_kwargs["freeze_threshold"],
+                    calibration_frames=task_kwargs["calibration_frames"],
+                    crop_region=crop_region,
+                )
+                logger.info(
+                    "腿部模块 [%s/%s] 开始处理: %s",
+                    task_kwargs["task_display"], target_side or "双侧", video_path,
+                )
+                per_side, warnings, quality, annotated_video = _process_one_task(
+                    cfg, video_path, self.REQUIRED_ACTIONS, pose_conf,
+                    progress=progress,
+                    output_dir=output_dir,
+                    target_side=target_side,
+                    segment_start_s=segment_start,
+                    segment_end_s=segment_end,
+                )
+                all_tasks[task_id].update(per_side)
+                all_warnings.extend(warnings)
+                quality_key = (
+                    segment_meta["segment_id"] if segment_meta
+                    else (f"{task_id}_{target_side}" if target_side else task_id)
+                )
+                all_quality[quality_key] = quality
+                if annotated_video is not None and annotated_video.is_file():
+                    annotated_videos.append(
+                        {
+                            "segment_id": quality_key,
+                            "task_type": task_id,
+                            "side": target_side,
+                            "label": segment_meta["label"] if segment_meta else (
+                                f"{'左侧' if target_side == 'left' else '右侧'}{task_kwargs['task_display']}"
+                                if target_side else task_kwargs["task_display"]
+                            ),
+                            "artifact_index": len(output_artifacts),
+                            "media_type": "video/webm",
+                            "telemetry": quality.get("telemetry", []),
+                        }
+                    )
+                    output_artifacts.append(str(annotated_video.resolve()))
+
+            for side in ("left", "right"):
+                all_tasks[task_id].setdefault(side, {
+                    "status": _INCOMPLETE_FLAG,
+                    "detected_actions": 0,
+                    "required_actions": self.REQUIRED_ACTIONS,
+                    "score": 0,
+                    "reasons": ["No data: side-specific video input missing"],
+                    "pauses": 0,
+                    "speed_ratio": 1.0,
+                    "amplitude_decrease_level": 0,
+                })
 
         # ---- flatten metrics ----
         metrics: Dict[str, Any] = {}

@@ -90,6 +90,14 @@ const compactSlotLabels: Record<string, string> = {
   hand_video: "手部视频",
   toe_tapping_video: "脚趾拍地视频",
   leg_agility_video: "抬腿视频",
+  toe_tapping_left_video: "左脚脚趾拍地视频",
+  toe_tapping_right_video: "右脚脚趾拍地视频",
+  leg_agility_left_video: "左侧抬腿视频",
+  leg_agility_right_video: "右侧抬腿视频",
+  leg_video: "腿部完整视频",
+  leg_segment_manifest: "腿部动作分段文件",
+  toe_tapping_manifest: "脚趾拍地裁剪清单",
+  leg_agility_manifest: "抬腿裁剪清单",
   insole_data: "鞋垫数据",
 };
 
