@@ -116,7 +116,8 @@ class OverallPostureModule(InferenceModule):
                     label="步行分段清单",
                     description=(
                         "视频分割页保存的 segments.csv 或 segments.json，"
-                        "必须包含 segment_id、label、task_type、start_s、end_s。"
+                        "必须包含 segment_id、label、task_type、start_s、end_s；"
+                        "保存的 walk 裁剪区域也会在评估时应用。"
                     ),
                     accepted_kinds=["tabular"],
                     required=True,
@@ -158,7 +159,7 @@ class OverallPostureModule(InferenceModule):
             issues.append("segment_manifest 只支持 .csv 或 .json。")
         else:
             try:
-                walk_segments, manifest_distance, _ = self._read_manifest(
+                walk_segments, manifest_distance, _, _ = self._read_manifest(
                     manifest_files[0].path
                 )
                 if not walk_segments:
@@ -194,7 +195,12 @@ class OverallPostureModule(InferenceModule):
 
         bag_path = request.inputs["walk_source"][0].path
         manifest_path = request.inputs["segment_manifest"][0].path
-        walk_segments, manifest_distance, ignored_count = self._read_manifest(
+        (
+            walk_segments,
+            manifest_distance,
+            ignored_count,
+            crop_region,
+        ) = self._read_manifest(
             manifest_path
         )
         walk_distance_m, used_default_distance = self._resolve_walk_distance(
@@ -228,6 +234,7 @@ class OverallPostureModule(InferenceModule):
             out=str(output_dir),
             score_file=None,
             walk_distance_m=walk_distance_m,
+            crop_region=crop_region,
             depth_window=int(request.parameters.get("depth_window", 5)),
             model_complexity=1,
             model_path=str(self.pose_model_path),
@@ -530,8 +537,14 @@ class OverallPostureModule(InferenceModule):
     @staticmethod
     def _read_manifest(
         path: Path,
-    ) -> tuple[list[dict[str, object]], float | None, int]:
+    ) -> tuple[
+        list[dict[str, object]],
+        float | None,
+        int,
+        tuple[int, int, int, int] | None,
+    ]:
         manifest_distance: float | None = None
+        crop_region: tuple[int, int, int, int] | None = None
         if path.suffix.lower() == ".json":
             payload = json.loads(path.read_text(encoding="utf-8-sig"))
             if isinstance(payload, dict):
@@ -539,6 +552,19 @@ class OverallPostureModule(InferenceModule):
                 raw_distance = payload.get("walk_distance_m")
                 if raw_distance is not None:
                     manifest_distance = float(raw_distance)
+                raw_crop = payload.get("crop_region")
+                if raw_crop is not None:
+                    if (
+                        not isinstance(raw_crop, (list, tuple))
+                        or len(raw_crop) != 4
+                    ):
+                        raise ValueError("crop_region 必须是 [x, y, w, h] 数组")
+                    crop_region = tuple(int(value) for value in raw_crop)
+                    x, y, width, height = crop_region
+                    if x < 0 or y < 0:
+                        raise ValueError("crop_region 的 x/y 不允许负值")
+                    if width <= 0 or height <= 0:
+                        raise ValueError("crop_region 的宽度和高度必须大于 0")
             elif isinstance(payload, list):
                 rows = payload
             else:
@@ -549,6 +575,29 @@ class OverallPostureModule(InferenceModule):
 
         if not isinstance(rows, list):
             raise ValueError("segments 必须是数组")
+        if crop_region is None and rows:
+            crop_fields = ("crop_x", "crop_y", "crop_w", "crop_h")
+            csv_crops: set[tuple[int, int, int, int]] = set()
+            for raw in rows:
+                if not isinstance(raw, dict):
+                    continue
+                values = [raw.get(field) for field in crop_fields]
+                supplied = [value not in (None, "") for value in values]
+                if any(supplied) and not all(supplied):
+                    raise ValueError(
+                        "CSV 裁剪区域必须同时包含 crop_x/crop_y/crop_w/crop_h"
+                    )
+                if all(supplied):
+                    csv_crops.add(tuple(int(value) for value in values))
+            if len(csv_crops) > 1:
+                raise ValueError("CSV 中各片段的 crop_region 必须一致")
+            if csv_crops:
+                crop_region = next(iter(csv_crops))
+                x, y, width, height = crop_region
+                if x < 0 or y < 0:
+                    raise ValueError("crop_region 的 x/y 不允许负值")
+                if width <= 0 or height <= 0:
+                    raise ValueError("crop_region 的宽度和高度必须大于 0")
         required = {"segment_id", "label", "task_type", "start_s", "end_s"}
         normalized: list[dict[str, object]] = []
         ignored_count = 0
@@ -606,7 +655,7 @@ class OverallPostureModule(InferenceModule):
             ):
                 raise ValueError("JSON 顶层与分段内 walk_distance_m 不一致")
             manifest_distance = row_distance
-        return normalized, manifest_distance, ignored_count
+        return normalized, manifest_distance, ignored_count, crop_region
 
     @staticmethod
     def _write_walk_manifest(

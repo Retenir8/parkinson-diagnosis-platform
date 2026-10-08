@@ -621,26 +621,8 @@ def annotate_frame(frame_bgr, results, vision, cv2, segment: Segment, frame: Pos
             cv2.circle(annotated, point, 4, (255, 255, 255), -1, cv2.LINE_AA)
             cv2.circle(annotated, point, 5, (14, 139, 130), 1, cv2.LINE_AA)
 
-    status = "POSE" if frame.detected else "NO POSE"
-    color = (0, 220, 0) if frame.detected else (0, 0, 255)
-    valid_text = "valid3d: n/a" if valid_rate is None else f"valid3d: {valid_rate * 100:.1f}%"
-    detected_points = sum(
-        1 for point in frame.landmarks.values() if point.valid_depth
-    )
-    segment_elapsed = max(0.0, frame.timestamp_s - segment.start_s)
-    overlay_lines = [
-        f"Segment: {segment.segment_id} {segment.label} ({segment.task_type})",
-        (
-            f"Frame: {frame.frame_index}  Time: {frame.timestamp_s:.3f}s  "
-            f"Segment: {segment_elapsed:.2f}/{segment.duration_s:.2f}s"
-        ),
-        f"{status}  {valid_text}  depth points: {detected_points}/{len(LANDMARK_NAMES)}",
-    ]
-    x, y = 12, 28
-    for line_index, line in enumerate(overlay_lines):
-        text_color = color if line_index == 2 else (255, 255, 255)
-        cv2.putText(annotated, line, (x, y + line_index * 28), cv2.FONT_HERSHEY_SIMPLEX, 0.68, (0, 0, 0), 4, cv2.LINE_AA)
-        cv2.putText(annotated, line, (x, y + line_index * 28), cv2.FONT_HERSHEY_SIMPLEX, 0.68, text_color, 2, cv2.LINE_AA)
+    # 视频只绘制姿态骨架；片段、时间、检出率和深度质量改由前端
+    # 播放器侧栏展示，避免逐帧文字遮挡动作画面。
     return annotated
 
 
@@ -1370,6 +1352,7 @@ def run_analysis(args: argparse.Namespace) -> Dict[str, object]:
     first_timestamp_ms = None
     last_pose_timestamp_ms = -1
     max_end_s = max(segment.end_s for segment in segments)
+    crop_region = getattr(args, "crop_region", None)
     write_annotated_video = bool(
         getattr(args, "write_annotated_video", True)
     )
@@ -1387,6 +1370,24 @@ def run_analysis(args: argparse.Namespace) -> Dict[str, object]:
         width = int(intrinsics.width)
         height = int(intrinsics.height)
         fps = float(color_profile.fps() or 30.0)
+
+        if crop_region is not None:
+            crop_x, crop_y, crop_width, crop_height = crop_region
+            crop_right = crop_x + crop_width
+            crop_bottom = crop_y + crop_height
+            if (
+                crop_x < 0
+                or crop_y < 0
+                or crop_width <= 0
+                or crop_height <= 0
+                or crop_right > width
+                or crop_bottom > height
+            ):
+                raise ValueError(
+                    "crop_region 超出视频画面范围："
+                    f"区域=({crop_x}, {crop_y}, {crop_width}, {crop_height})，"
+                    f"画面={width}x{height}"
+                )
 
         for segment in segments:
             outputs[segment.segment_id] = SegmentOutput(
@@ -1444,7 +1445,16 @@ def run_analysis(args: argparse.Namespace) -> Dict[str, object]:
                 continue
 
             frame_bgr = color_frame_to_bgr(color_frame, cv2, np, rs)
-            frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+            detection_frame = frame_bgr
+            if crop_region is not None:
+                # 保持原始画幅和相机内参不变，只屏蔽 ROI 外的像素；这样
+                # MediaPipe 只会考虑用户框选区域内的人体，同时深度坐标和
+                # 标注视频仍能使用原始画面坐标。
+                detection_frame = np.zeros_like(frame_bgr)
+                detection_frame[
+                    crop_y:crop_bottom, crop_x:crop_right
+                ] = frame_bgr[crop_y:crop_bottom, crop_x:crop_right]
+            frame_rgb = cv2.cvtColor(detection_frame, cv2.COLOR_BGR2RGB)
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
             pose_timestamp_ms = int(round(timestamp_s * 1000.0))
             if pose_timestamp_ms <= last_pose_timestamp_ms:

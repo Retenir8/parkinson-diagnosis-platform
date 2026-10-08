@@ -142,6 +142,7 @@ export interface ReportSeverity {
   label: string;
   class_value?: number | null;
   confidence?: number | null;
+  probabilities?: Record<string, number | null> | null;
   source_module_id?: string | null;
   source_score_key?: string | null;
   basis: string;
@@ -178,6 +179,7 @@ export interface VideoSegment {
   segment_id: string;
   label: string;
   task_type: string;
+  side?: "left" | "right" | null;
   start_s: number;
   end_s: number;
 }

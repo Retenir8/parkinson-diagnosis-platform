@@ -5,6 +5,7 @@ import {
   FileClock,
   FileText,
   Filter,
+  Gauge,
   Printer,
   Search,
   ShieldCheck,
@@ -54,6 +55,12 @@ function formatDate(value: string) {
 function formatConfidence(value?: number | null) {
   return typeof value === "number" ? `${(value * 100).toFixed(1)}%` : "—";
 }
+
+const probabilityLabels: Record<string, string> = {
+  "0": "健康",
+  "1": "轻度",
+  "2": "中重度",
+};
 
 function printReport() {
   window.print();
@@ -240,19 +247,25 @@ onMounted(async () => {
               class="report-severity-banner"
               :class="`severity-${selectedReport.severity?.code ?? 'unavailable'}`"
             >
-              <div>
-                <span>模型分层结果</span>
-                <strong>{{ selectedReport.severity?.label ?? "暂无法分层" }}</strong>
-                <p>{{ selectedReport.severity?.basis }}</p>
-              </div>
-              <div class="severity-confidence">
-                <span>模型置信度</span>
-                <strong>{{ formatConfidence(selectedReport.severity?.confidence) }}</strong>
-              </div>
-              <div class="severity-scale">
-                <span :class="{ active: selectedReport.severity?.code === 'healthy' }">健康</span>
-                <span :class="{ active: selectedReport.severity?.code === 'mild' }">轻度</span>
-                <span :class="{ active: selectedReport.severity?.code === 'moderate_severe' }">中重度</span>
+              <header class="report-probability-heading">
+                <span><Gauge :size="18" /></span>
+                <div><strong>模型诊断概率分布</strong><p>{{ selectedReport.severity?.basis }}</p></div>
+              </header>
+              <div class="probability-chart report-probability-chart" aria-label="0、1、2 诊断概率柱状图">
+                <div class="chart-y-axis">
+                  <span v-for="tick in [100, 75, 50, 25, 0]" :key="tick">{{ tick }}%</span>
+                </div>
+                <div class="chart-plot">
+                  <i v-for="tick in [100, 75, 50, 25, 0]" :key="tick" :style="{ bottom: `${tick}%` }" />
+                  <div v-for="classId in ['0', '1', '2']" :key="classId" class="chart-bar-group">
+                    <div class="chart-bar-area">
+                      <div class="chart-bar" :style="{ height: `${Math.max(0, Math.min(100, Number(selectedReport.severity?.probabilities?.[classId] ?? 0) * 100))}%` }">
+                        <strong>{{ formatConfidence(selectedReport.severity?.probabilities?.[classId]) }}</strong>
+                      </div>
+                    </div>
+                    <span><b>{{ classId }}</b>{{ probabilityLabels[classId] }}</span>
+                  </div>
+                </div>
               </div>
             </section>
 

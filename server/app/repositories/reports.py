@@ -123,7 +123,7 @@ class ReportRepository:
                 basis="缺少整体姿态 np3gait_class 输出",
             )
 
-        confidence_values: list[float] = []
+        probability_values: dict[str, list[float]] = {"0": [], "1": [], "2": []}
         segments = result.result_data.get("segments", []) if result else []
         if isinstance(segments, list):
             for segment in segments:
@@ -136,16 +136,23 @@ class ReportRepository:
                     else {}
                 )
                 if isinstance(probabilities, dict):
-                    value = probabilities.get(str(class_value))
-                    if isinstance(value, (int, float)):
-                        confidence_values.append(float(value))
+                    for probability_class in probability_values:
+                        value = probabilities.get(probability_class)
+                        if isinstance(value, (int, float)):
+                            probability_values[probability_class].append(float(value))
+
+        mean_probabilities = {
+            probability_class: mean(values) if values else None
+            for probability_class, values in probability_values.items()
+        }
 
         code, label = labels[class_value]
         return ReportSeverity(
             code=code,
             label=label,
             class_value=class_value,
-            confidence=(mean(confidence_values) if confidence_values else None),
+            confidence=mean_probabilities[str(class_value)],
+            probabilities=mean_probabilities,
             source_module_id="overall-posture",
             source_score_key="np3gait_class",
             basis="整体姿态 walk17 三分类模型输出的研究性映射",

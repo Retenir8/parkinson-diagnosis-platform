@@ -16,6 +16,7 @@ class VideoSegment(BaseModel):
     segment_id: str = Field(min_length=1, max_length=100)
     label: str = Field(min_length=1, max_length=200)
     task_type: str = Field(min_length=1, max_length=100)
+    side: Literal["left", "right"] | None = None
     start_s: float = Field(ge=0)
     end_s: float = Field(gt=0)
 

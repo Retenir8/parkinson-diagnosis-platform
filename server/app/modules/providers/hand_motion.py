@@ -35,7 +35,6 @@ from app.modules.mediapipe_compat import prepare_legacy_solutions
 from app.modules.video_annotation import (
     AnnotatedVideoWriter,
     draw_hand_skeleton,
-    put_text_block,
 )
 from app.schemas.modules import (
     InputSlotDescriptor,
@@ -493,7 +492,7 @@ def _mirror_label(handedness, idx):
 def _parse_segment_manifest(path: Path) -> Tuple[List[Dict[str, Any]], Optional[tuple]]:
     """解析手部分段清单（CSV/JSON），校验格式与时间。
 
-    与整体姿态一致：列 segment_id/label/task_type/start_s/end_s，
+    与整体姿态一致：列 segment_id/label/task_type/side/start_s/end_s，
     时间以视频第一帧为 0 基准；要求不重叠、ID 唯一。
     JSON 顶层可携带 crop_region（[x, y, w, h]）作用于整段视频。
     返回 (按 start_s 排序的分段列表, crop_region 或 None)。
@@ -541,6 +540,8 @@ def _parse_segment_manifest(path: Path) -> Tuple[List[Dict[str, Any]], Optional[
         segment_id = str(raw["segment_id"]).strip()
         label = str(raw["label"]).strip()
         task_type = str(raw["task_type"]).strip().lower()
+        raw_side = raw.get("side")
+        side = str(raw_side).strip().lower() if raw_side not in (None, "") else None
         if not segment_id or not label or not task_type:
             raise ValueError(f"第 {index} 个分段的 ID/label/task_type 为空")
         if task_type not in HAND_TASK_TYPES:
@@ -549,6 +550,8 @@ def _parse_segment_manifest(path: Path) -> Tuple[List[Dict[str, Any]], Optional[
                 f"第 {index} 个分段的 task_type 不受手部模块支持："
                 f"{task_type}；可选值：{supported}"
             )
+        if side not in (None, "left", "right"):
+            raise ValueError(f"第 {index} 个分段的 side 必须是 left 或 right")
         if segment_id in ids:
             raise ValueError(f"segment_id 重复：{segment_id}")
         ids.add(segment_id)
@@ -571,6 +574,7 @@ def _parse_segment_manifest(path: Path) -> Tuple[List[Dict[str, Any]], Optional[
                 "segment_id": segment_id,
                 "label": label,
                 "task_type": task_type,
+                "side": side,
                 "start_s": start_s,
                 "end_s": end_s,
             }
@@ -708,7 +712,8 @@ class HandMotionModule(InferenceModule):
                     label="手部动作分段清单（可选）",
                     description=(
                         "与整体姿态一致的分段文件（segments.csv/json，"
-                        "包含 segment_id、label、task_type、start_s、end_s）。"
+                        "包含 segment_id、label、task_type、side、start_s、end_s；"
+                        "side 使用 left/right，以便左右手分段独立评分）。"
                         "提供且格式合法时启用分段模式：每个分段独立识别与评分，"
                         "每个分段输出一段标注视频。"
                     ),
@@ -822,6 +827,7 @@ class HandMotionModule(InferenceModule):
         """对指状态机 + 张开峰值幅度 + 信号缓冲。"""
         raw_opp = opposition_signal(hand_lm, self.INDEX_EXTENSION_ANGLE)
         is_fist_opp = raw_opp >= INVALID_SIGNAL_SENTINEL
+        st["opp"]["last_signal"] = None if is_fist_opp else float(raw_opp)
         is_touch = (
             (not is_fist_opp)
             and raw_opp < self.TOUCH_SIGNAL_THRESHOLD
@@ -872,6 +878,7 @@ class HandMotionModule(InferenceModule):
         才视为有效，避免静止手被误计。
         """
         alt_sig = alternation_signal(hand_lm)
+        st["alt"]["last_signal"] = float(alt_sig)
         raw_dx = abs(hand_lm.landmark[17].x - hand_lm.landmark[2].x)
         if raw_dx < self.LUNTI_MIN_RAW_DX:
             cur_sign = 0
@@ -1273,6 +1280,7 @@ class HandMotionModule(InferenceModule):
         annotated_video_dir = output_dir / "videos"
         video_writers: Dict[str, Any] = {}
         annotated_video_paths: Dict[str, Path] = {}
+        video_telemetry: Dict[str, List[Dict[str, Any]]] = {}
         input_stem = Path(str(video_files[0].path)).stem
 
         # ---- 分段模式：可选分段清单（参考整体姿态） ----
@@ -1290,6 +1298,7 @@ class HandMotionModule(InferenceModule):
         seg_task_types = {
             s["segment_id"]: s["task_type"] for s in segments
         }
+        seg_sides = {s["segment_id"]: s.get("side") for s in segments}
 
         # 裁剪区域：清单携带的优先，否则用模块默认
         crop_region = manifest_crop_region or self.CROP_REGION
@@ -1302,13 +1311,13 @@ class HandMotionModule(InferenceModule):
                     "state": "OPEN", "in_opposition": False,
                     "count": 0, "last_action_time": 0.0,
                     "records": [], "current_record": None,
-                    "open_peak": 0.0,
+                    "open_peak": 0.0, "last_signal": None,
                 },
                 "alt": {
                     "prev_sign": 0, "count": 0,
                     "last_action_time": 0.0, "records": [],
                     "cur_sign": 0, "same_dir_time": 0.0,
-                    "last_frame_time": None,
+                    "last_frame_time": None, "last_signal": None,
                 },
                 "fist": ActionDetector(
                     mode="valley",
@@ -1501,62 +1510,49 @@ class HandMotionModule(InferenceModule):
                         ):
                             hl = _mirror_label(mp_result.multi_handedness, i)
                             draw_hand_skeleton(roi_view, hand_lm.landmark)
-                    # 裁剪区域用绿框标出（在贴回之后绘制，避免被覆盖）
-                    if crop_region:
-                        cv2.rectangle(
-                            annotated, (cx, cy), (cx + cw, cy + ch),
-                            (0, 220, 0), 2, cv2.LINE_AA,
-                        )
-                        cv2.putText(
-                            annotated, "ROI", (cx + 6, max(cy - 8, 20)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.55,
-                            (0, 220, 0), 2, cv2.LINE_AA,
-                        )
-                    # 每只手计数面板：常态显示（不依赖检测结果，避免闪烁）；
-                    # 分段模式只显示该分段对应动作的计数
-                    seg_states = states[video_seg_key]
-                    seg_task = seg_task_types.get(video_seg_key)
-                    for hl in ("Left", "Right"):
-                        st = seg_states[hl]
-                        os_ = st["opp"]
-                        as_ = st["alt"]
-                        fist_count = st["fist"].get_event_count()
-                        panel_lines = []
-                        if seg_task is None or seg_task == "finger_opposition":
-                            panel_lines.append(
-                                f"{hl}: opp {os_['count']}/{self.REQUIRED_ACTIONS}"
-                            )
-                        if seg_task is None or seg_task == "hand_alternation":
-                            panel_lines.append(
-                                f"alt {as_['count']}/{self.REQUIRED_ACTIONS}"
-                            )
-                        if seg_task is None or seg_task == "fist_clenching":
-                            panel_lines.append(
-                                f"fist {fist_count}/{self.REQUIRED_ACTIONS}"
-                            )
-                        if panel_lines:
-                            put_text_block(
-                                annotated,
-                                panel_lines,
-                                origin=(
-                                    (12, 108)
-                                    if hl == "Left"
-                                    else (annotated.shape[1] - 280, 108)
+                    # 仅保留动作骨架。动作名称、计数、状态与评分由前端
+                    # 播放器侧栏展示，避免文字遮挡患者动作画面。
+                    seg_meta = next(
+                        (s for s in segments if s["segment_id"] == video_seg_key),
+                        None,
+                    )
+                    local_time = (
+                        timestamp_s - float(seg_meta["start_s"])
+                        if seg_meta is not None
+                        else timestamp - float(first_frame_ts or timestamp)
+                    )
+                    telemetry_hands: Dict[str, Any] = {}
+                    for hand_label in ("Left", "Right"):
+                        hand_state = states[video_seg_key][hand_label]
+                        telemetry_hands[hand_label.lower()] = {
+                            "detected": hand_label in detected_hands,
+                            "finger_opposition": {
+                                "count": hand_state["opp"]["count"],
+                                "state": hand_state["opp"]["state"],
+                                "signal": hand_state["opp"].get("last_signal"),
+                            },
+                            "hand_alternation": {
+                                "count": hand_state["alt"]["count"],
+                                "state": (
+                                    "TURNING" if hand_state["alt"]["cur_sign"]
+                                    else "READY"
                                 ),
-                                scale=0.55,
-                            )
-                    title = (
-                        f"Hand Motion: {video_seg_key}"
-                        if video_seg_key != "__whole__"
-                        else "Hand Motion: opposition / alternation / fist"
-                    )
-                    put_text_block(
-                        annotated,
-                        [
-                            title,
-                            f"Frame: {frame_idx}  Time: {timestamp:.3f}s",
-                        ],
-                    )
+                                "signal": hand_state["alt"].get("last_signal"),
+                            },
+                            "fist_clenching": {
+                                "count": hand_state["fist"].get_event_count(),
+                                "state": (
+                                    "CLENCHED" if hand_state["fist_posture"]
+                                    else "OPEN"
+                                ),
+                                "signal": hand_state.get("last_valid_signal"),
+                            },
+                        }
+                    video_telemetry.setdefault(video_seg_key, []).append({
+                        "frame_index": len(video_telemetry.get(video_seg_key, [])) + 1,
+                        "time_s": max(0.0, local_time),
+                        "hands": telemetry_hands,
+                    })
                     video_writer.write(annotated)
 
                 if progress and frame_idx % 30 == 0:
@@ -1575,6 +1571,9 @@ class HandMotionModule(InferenceModule):
                     "fist_clenching": {},
                 }
                 for hl in ("Left", "Right"):
+                    requested_side = seg_sides.get(seg_key)
+                    if requested_side and hl.lower() != requested_side:
+                        continue
                     st = hand_states[hl]
                     hand_tasks, hand_warnings = self._score_hand_state(
                         st, hl,
@@ -1609,6 +1608,7 @@ class HandMotionModule(InferenceModule):
                             "label": "手部三任务标注",
                             "artifact_index": artifact_index,
                             "media_type": "video/webm",
+                            "telemetry": video_telemetry.get(seg_key, []),
                         }
                     )
                 else:
@@ -1622,6 +1622,7 @@ class HandMotionModule(InferenceModule):
                             "label": meta.get("label", seg_key),
                             "artifact_index": artifact_index,
                             "media_type": "video/webm",
+                            "telemetry": video_telemetry.get(seg_key, []),
                         }
                     )
 

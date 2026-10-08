@@ -317,7 +317,12 @@ def test_module_descriptors_define_input_slots(client: TestClient) -> None:
     assert modules["overall-posture"]["status"] == "ready"
     assert modules["hand-motion"]["input_slots"][0]["key"] == "hand_video"
     leg_slots = {s["key"] for s in modules["leg-motion"]["input_slots"]}
-    assert leg_slots == {"toe_tapping_video", "leg_agility_video"}
+    assert leg_slots == {
+        "toe_tapping_video",
+        "leg_agility_video",
+        "toe_tapping_manifest",
+        "leg_agility_manifest",
+    }
     assert modules["smart-insole"]["input_slots"][0]["key"] == "insole_data"
 
 

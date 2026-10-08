@@ -46,6 +46,8 @@ const taskOptions: TaskOption[] = [
   { value: "finger_opposition", label: "对指 · finger_opposition" },
   { value: "hand_alternation", label: "轮替 · hand_alternation" },
   { value: "fist_clenching", label: "握拳 · fist_clenching" },
+  { value: "toe_tapping", label: "脚趾拍地 · toe_tapping" },
+  { value: "leg_agility", label: "抬腿灵活性 · leg_agility" },
 ];
 
 /** 手部动作任务：分段时使用裁剪区域而非步行距离 */
@@ -54,17 +56,34 @@ const HAND_TASK_TYPES = new Set([
   "hand_alternation",
   "fist_clenching",
 ]);
+const LEG_TASK_TYPES = new Set(["toe_tapping", "leg_agility"]);
 function isHandTask(taskType: string): boolean {
   return HAND_TASK_TYPES.has(taskType.trim());
+}
+function isSideSpecificTask(taskType: string): boolean {
+  const normalized = taskType.trim();
+  return HAND_TASK_TYPES.has(normalized) || LEG_TASK_TYPES.has(normalized);
+}
+
+function needsCropRegion(taskType: string): boolean {
+  const normalized = taskType.trim();
+  return (
+    isHandTask(normalized) ||
+    LEG_TASK_TYPES.has(normalized) ||
+    normalized === "walk"
+  );
 }
 
 /** 手部裁剪区域默认值与手部模块 CROP_REGION 一致 */
 const DEFAULT_CROP_REGION = { x: 400, y: 100, w: 480, h: 480 };
 const cropRegion = ref({ ...DEFAULT_CROP_REGION });
 
-/** 当前标记任务是否为手部动作（决定步行距离/裁剪区域输入与预览叠加框） */
-const markerIsHandTask = computed(
-  () => isHandTask(markerTaskChoice.value),
+/** 当前任务决定步行距离和裁剪区域输入。 */
+const markerIsWalkTask = computed(
+  () => markerTaskChoice.value.trim() === "walk",
+);
+const markerNeedsCropRegion = computed(
+  () => needsCropRegion(markerTaskChoice.value),
 );
 /** 预览视频上的裁剪框（按原始分辨率换算百分比） */
 const cropOverlayStyle = computed(() => {
@@ -107,6 +126,7 @@ const currentPreviewTime = ref(0);
 const loadedPreviewDuration = ref(0);
 
 const markerTaskChoice = ref("");
+const markerSide = ref<"left" | "right">("left");
 const markerCustomTaskType = ref("");
 const markerLabel = ref("");
 const markerStart = ref(0);
@@ -389,6 +409,7 @@ function addSegment() {
     segment_id: nextSegmentId(),
     label,
     task_type: taskType,
+    side: isSideSpecificTask(taskType) ? markerSide.value : null,
     start_s: Number(markerStart.value.toFixed(3)),
     end_s: Number(markerEnd.value.toFixed(3)),
   };
@@ -479,12 +500,12 @@ async function saveSegments() {
       start_s: Number(item.start_s.toFixed(3)),
       end_s: Number(item.end_s.toFixed(3)),
     }));
-    // 含手部动作分段时保存裁剪区域（作用于整段视频）
-    const hasHandSegments = normalized.some((item) =>
-      isHandTask(item.task_type),
+    // 含 walk、手部或腿部动作时保存裁剪区域（作用于整段视频）
+    const hasCropSegments = normalized.some((item) =>
+      needsCropRegion(item.task_type),
     );
     const parsedCrop: [number, number, number, number] | undefined =
-      hasHandSegments
+      hasCropSegments
         ? [
             cropRegion.value.x,
             cropRegion.value.y,
@@ -758,7 +779,7 @@ onUnmounted(() => {
                     @seeked="onTimeUpdate"
                   />
                   <div
-                    v-if="markerIsHandTask"
+                    v-if="markerNeedsCropRegion"
                     class="crop-overlay"
                     :style="cropOverlayStyle"
                   />
@@ -809,7 +830,7 @@ onUnmounted(() => {
                   </div>
                 </div>
 
-                <label v-if="!markerIsHandTask" class="field">
+                <label v-if="markerIsWalkTask" class="field">
                   <span>实际步行距离（米，可选）</span>
                   <input
                     v-model="walkDistanceM"
@@ -821,7 +842,7 @@ onUnmounted(() => {
                   />
                 </label>
 
-                <div v-else class="field crop-region-field">
+                <div v-if="markerNeedsCropRegion" class="field crop-region-field">
                   <span>裁剪区域（x, y, w, h，像素）</span>
                   <div class="crop-region-inputs">
                     <label>
@@ -908,6 +929,14 @@ onUnmounted(() => {
                   />
                 </label>
 
+                <label v-if="isSideSpecificTask(markerTaskChoice)" class="field">
+                  <span>当前片段执行侧</span>
+                  <select v-model="markerSide">
+                    <option value="left">{{ isHandTask(markerTaskChoice) ? "左手" : "左侧" }}</option>
+                    <option value="right">{{ isHandTask(markerTaskChoice) ? "右手" : "右侧" }}</option>
+                  </select>
+                </label>
+
                 <div class="marker-time">
                   <div>
                     <span>开始时间</span>
@@ -957,6 +986,7 @@ onUnmounted(() => {
                   <thead>
                     <tr>
                       <th>编号</th>
+                      <th>执行侧</th>
                       <th>任务</th>
                       <th>名称</th>
                       <th>开始（秒）</th>
@@ -976,6 +1006,14 @@ onUnmounted(() => {
                           class="id-input"
                           @input="dirty = true"
                         />
+                      </td>
+                      <td>
+                        <select v-if="isSideSpecificTask(segment.task_type)" v-model="segment.side" @change="dirty = true">
+                          <option :value="null">未指定（旧数据双侧）</option>
+                          <option value="left">{{ isHandTask(segment.task_type) ? "左手" : "左侧" }}</option>
+                          <option value="right">{{ isHandTask(segment.task_type) ? "右手" : "右侧" }}</option>
+                        </select>
+                        <span v-else>—</span>
                       </td>
                       <td>
                         <select

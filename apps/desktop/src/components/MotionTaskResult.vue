@@ -23,6 +23,7 @@ interface SegmentResult {
   segment_id: string;
   label?: string;
   task_type?: string;
+  side?: "left" | "right" | null;
   start_s?: number | null;
   end_s?: number | null;
   tasks?: Tasks;
@@ -30,9 +31,19 @@ interface SegmentResult {
 
 interface AnnotatedVideo {
   segment_id: string;
+  task_type?: string;
+  side?: "left" | "right" | null;
   label?: string;
   artifact_index: number;
   media_type?: string;
+  telemetry?: TelemetryFrame[];
+}
+
+interface TelemetryFrame {
+  frame_index?: number;
+  time_s: number;
+  hands?: Record<string, Record<string, { count?: number; state?: string } | boolean>>;
+  sides?: Record<string, { count?: number; lift?: number; state?: string }>;
 }
 
 const props = defineProps<{
@@ -61,10 +72,15 @@ const tasks = computed(() => {
     "hand_alternation",
     "fist_clenching",
   ]) {
-    const matched = segments.value.find(
-      (segment) => segment.task_type === taskKey,
-    );
-    merged[taskKey] = matched?.tasks?.[taskKey] ?? fallback[taskKey] ?? {};
+    const matchedSides: Partial<Record<"left" | "right", SideResult>> = {};
+    for (const segment of segments.value) {
+      if (segment.task_type === taskKey) {
+        Object.assign(matchedSides, segment.tasks?.[taskKey] ?? {});
+      }
+    }
+    merged[taskKey] = Object.keys(matchedSides).length
+      ? matchedSides
+      : fallback[taskKey] ?? {};
   }
   return merged;
 });
@@ -121,12 +137,79 @@ const videoUrl = computed(() =>
       )
     : "",
 );
+const activeTaskKey = computed(() => {
+  const segmentTask = selectedSegment.value?.task_type;
+  if (segmentTask && tasks.value[segmentTask]) return segmentTask;
+  const videoTask = selectedVideo.value?.segment_id;
+  const explicitVideoTask = selectedVideo.value?.task_type;
+  if (explicitVideoTask && tasks.value[explicitVideoTask]) return explicitVideoTask;
+  if (videoTask && tasks.value[videoTask]) return videoTask;
+  return Object.keys(tasks.value)[0] ?? "";
+});
+const activeTask = computed(() =>
+  selectedSegment.value?.tasks?.[activeTaskKey.value]
+  ?? tasks.value[activeTaskKey.value]
+  ?? {},
+);
+const displayedSideKeys = computed(() =>
+  selectedSegment.value?.side || selectedVideo.value?.side
+    ? [selectedSegment.value?.side ?? selectedVideo.value?.side!]
+    : [...sideKeys],
+);
+const currentTime = ref(0);
+const finalScoreVisible = ref(false);
+const currentTelemetry = computed(() => {
+  const frames = selectedVideo.value?.telemetry ?? [];
+  if (!frames.length) return undefined;
+  let low = 0;
+  let high = frames.length - 1;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (frames[middle].time_s <= currentTime.value) low = middle;
+    else high = middle - 1;
+  }
+  return frames[low];
+});
+function liveSide(side: "left" | "right"): { count?: number; lift?: number; state?: string } | undefined {
+  const frame = currentTelemetry.value;
+  if (!frame) return undefined;
+  if (frame.sides) return frame.sides[side];
+  const hand = frame.hands?.[side];
+  const task = hand?.[activeTaskKey.value];
+  return task && typeof task === "object" ? task : undefined;
+}
+function finalMetricValues(
+  key: "pauses" | "speed_ratio" | "amplitude_decrease_level",
+  formatted = false,
+) {
+  return displayedSideKeys.value
+    .map((side) => {
+      const value = activeTask.value[side]?.[key];
+      return formatted ? formatMetric(value) : (value ?? "—");
+    })
+    .join(" / ");
+}
+function updateVideoTime(event: Event) {
+  currentTime.value = (event.currentTarget as HTMLVideoElement).currentTime;
+}
+function startVideo() {
+  finalScoreVisible.value = false;
+}
+function finishVideo(event: Event) {
+  updateVideoTime(event);
+  finalScoreVisible.value = true;
+}
+watch(videoUrl, () => {
+  currentTime.value = 0;
+  finalScoreVisible.value = false;
+});
 </script>
 
 <template>
   <div class="motion-task-result">
 
-    <section v-if="videos.length" class="pose-video-panel motion-video-panel">
+    <div v-if="videos.length" class="motion-result-focus">
+    <section class="pose-video-panel motion-video-panel">
       <header class="result-panel-heading">
         <div>
           <span class="panel-icon"><Video :size="17" /></span>
@@ -171,12 +254,62 @@ const videoUrl = computed(() =>
         </select>
       </header>
       <div v-if="videoUrl" class="pose-video-frame">
-        <video :key="videoUrl" controls preload="metadata" :src="videoUrl" />
+        <video
+          :key="videoUrl"
+          controls
+          preload="metadata"
+          :src="videoUrl"
+          @play="startVideo"
+          @timeupdate="updateVideoTime"
+          @seeked="updateVideoTime"
+          @ended="finishVideo"
+        />
         <span class="video-mode-badge">
           <ScanLine :size="13" /> MediaPipe + RealSense
         </span>
       </div>
     </section>
+    <aside class="motion-live-score-panel">
+      <header>
+        <span><Activity :size="17" /></span>
+        <div>
+          <small>{{ finalScoreVisible ? "动作结束 · 评分已即时生成" : "动作进行中 · 实时识别" }}</small>
+          <strong>
+            {{ (selectedSegment?.side ?? selectedVideo?.side) === "left" ? (moduleId === "leg-motion" ? "左侧 · " : "左手 · ") : (selectedSegment?.side ?? selectedVideo?.side) === "right" ? (moduleId === "leg-motion" ? "右侧 · " : "右手 · ") : "" }}{{ TASK_NAMES[activeTaskKey] ?? activeTaskKey }}
+          </strong>
+        </div>
+      </header>
+      <div v-if="finalScoreVisible" class="score-reveal-banner">
+        <span class="live-dot" />本动作评分已生成
+      </div>
+      <div v-if="finalScoreVisible" class="motion-live-score-sides score-reveal" :class="{ 'single-side': displayedSideKeys.length === 1 }">
+        <section v-for="side in displayedSideKeys" :key="side">
+          <span>{{ side === "left" ? "左侧" : "右侧" }}</span>
+          <strong>{{ activeTask[side]?.score ?? "—" }}<small>/ 4</small></strong>
+          <em :class="activeTask[side]?.status === 'COMPLETE' ? 'complete' : 'incomplete'">
+            {{ liveSide(side)?.count ?? activeTask[side]?.detected_actions ?? 0 }} 次动作
+          </em>
+        </section>
+      </div>
+      <section v-else class="motion-live-telemetry" :class="{ unavailable: !currentTelemetry }">
+        <header><span class="live-dot" />视频同步信息<strong>Frame {{ currentTelemetry?.frame_index ?? "—" }} · {{ formatMetric(currentTime, 1) }} s</strong></header>
+        <div v-for="side in displayedSideKeys" :key="side">
+          <span>{{ side === "left" ? "左侧" : "右侧" }}</span>
+          <strong>{{ liveSide(side)?.state ?? "暂无逐帧数据" }}</strong>
+          <small>
+            动作 {{ liveSide(side)?.count ?? 0 }} 次
+            <template v-if="liveSide(side)?.lift !== undefined"> · lift {{ formatMetric(liveSide(side)?.lift, 3) }}</template>
+          </small>
+        </div>
+      </section>
+      <dl v-if="finalScoreVisible" class="motion-current-metrics score-reveal">
+        <div><dt>停顿次数</dt><dd>{{ finalMetricValues("pauses") }}</dd></div>
+        <div><dt>速度变化比</dt><dd>{{ finalMetricValues("speed_ratio", true) }}</dd></div>
+        <div><dt>幅度递减等级</dt><dd>{{ finalMetricValues("amplitude_decrease_level") }}</dd></div>
+      </dl>
+      <p>{{ finalScoreVisible ? "当前动作录像与评分可作为一个完整片段保留或裁剪。" : "评分将在本动作视频播放结束后立即显示。" }}</p>
+    </aside>
+    </div>
     <div
       v-else-if="result.result_data.visualization"
       class="visualization-unavailable"
@@ -195,6 +328,8 @@ const videoUrl = computed(() =>
       </small>
     </div>
 
+    <details class="all-score-details">
+      <summary>查看全部动作评分明细</summary>
     <div class="motion-task-grid">
       <article v-for="(sides, taskKey) in tasks" :key="taskKey">
         <header>
@@ -232,6 +367,7 @@ const videoUrl = computed(() =>
         </div>
       </article>
     </div>
+    </details>
 
     <ul v-if="result.warnings.length" class="result-warnings">
       <li v-for="warning in result.warnings" :key="warning">

@@ -45,6 +45,7 @@ def test_overall_posture_walk17_inference_contract(
         json.dumps(
             {
                 "walk_distance_m": 5.0,
+                "crop_region": [100, 50, 640, 480],
                 "segments": [
                     {
                         "segment_id": "1",
@@ -168,6 +169,7 @@ def test_overall_posture_walk17_inference_contract(
 
     assert captured_args is not None
     assert captured_args.walk_distance_m == 5.0
+    assert captured_args.crop_region == (100, 50, 640, 480)
     assert captured_args.score_file is None
     assert captured_args.write_annotated_video is True
     assert captured_args.video_codec == "VP80"

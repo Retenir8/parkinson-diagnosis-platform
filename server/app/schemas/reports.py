@@ -22,6 +22,7 @@ class ReportSeverity(BaseModel):
     label: str
     class_value: int | None = None
     confidence: float | None = None
+    probabilities: dict[str, float | None] | None = None
     source_module_id: str | None = None
     source_score_key: str | None = None
     basis: str
