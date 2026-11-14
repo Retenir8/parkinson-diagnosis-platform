@@ -224,6 +224,65 @@ def test_rejects_cross_module_artifact_mapping(client: TestClient) -> None:
     assert any("映射不一致" in issue["message"] for issue in issues)
 
 
+def test_leg_old_and_combined_input_modes(client: TestClient) -> None:
+    patient = client.post(
+        "/api/v1/patients",
+        json={"patient_code": "LEG-MODES", "name": "腿部接口测试", "gender": "unknown"},
+    ).json()
+
+    def upload(slot: str, name: str, kind: str = "video") -> str:
+        response = client.post(
+            f"/api/v1/patients/{patient['id']}/artifacts/upload",
+            data={"kind": kind, "module_id": "leg-motion", "input_slot": slot},
+            files={"file": (name, b"test-data", "application/octet-stream")},
+        )
+        assert response.status_code == 201
+        return response.json()["id"]
+
+    toe = upload("toe_tapping_video", "toe.mp4")
+    agility = upload("leg_agility_video", "agility.mp4")
+    combined = upload("leg_video", "combined.mp4")
+    manifest = upload("leg_segment_manifest", "segments.json", "tabular")
+    independent = {
+        slot: [upload(slot, f"{slot}.mp4")]
+        for slot in (
+            "toe_tapping_left_video", "toe_tapping_right_video",
+            "leg_agility_left_video", "leg_agility_right_video",
+        )
+    }
+
+    def create(slots: dict[str, list[str]]):
+        return client.post(
+            "/api/v1/assessments",
+            json={
+                "patient_id": patient["id"],
+                "module_inputs": {"leg-motion": slots},
+            },
+        )
+
+    assert create({
+        "toe_tapping_video": [toe], "leg_agility_video": [agility],
+    }).status_code == 201
+    assert create({
+        "leg_video": [combined], "leg_segment_manifest": [manifest],
+    }).status_code == 201
+    assert create(independent).status_code == 201
+    assert create({
+        slot: ids for slot, ids in independent.items()
+        if slot != "leg_agility_right_video"
+    }).status_code == 422
+    assert create({"leg_video": [combined]}).status_code == 422
+    assert create({
+        "leg_video": [combined], "leg_segment_manifest": [manifest],
+        "toe_tapping_video": [toe],
+    }).status_code == 422
+    assert create({
+        "toe_tapping_video": [toe],
+        "leg_agility_left_video": independent["leg_agility_left_video"],
+        "leg_agility_right_video": independent["leg_agility_right_video"],
+    }).status_code == 422
+
+
 def test_parallel_module_results_merge_without_data_loss(
     tmp_path: Path,
 ) -> None:
@@ -318,6 +377,12 @@ def test_module_descriptors_define_input_slots(client: TestClient) -> None:
     assert modules["hand-motion"]["input_slots"][0]["key"] == "hand_video"
     leg_slots = {s["key"] for s in modules["leg-motion"]["input_slots"]}
     assert leg_slots == {
+        "leg_video",
+        "leg_segment_manifest",
+        "toe_tapping_left_video",
+        "toe_tapping_right_video",
+        "leg_agility_left_video",
+        "leg_agility_right_video",
         "toe_tapping_video",
         "leg_agility_video",
         "toe_tapping_manifest",

@@ -1,0 +1,4 @@
+log/
+diagnostics/captures/
+diagnostics/smoke_sessions/
+diagnostics/ui_*.png

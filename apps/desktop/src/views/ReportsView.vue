@@ -249,9 +249,9 @@ onMounted(async () => {
             >
               <header class="report-probability-heading">
                 <span><Gauge :size="18" /></span>
-                <div><strong>模型诊断概率分布</strong><p>{{ selectedReport.severity?.basis }}</p></div>
+                <div><strong>步态模型分层概率（研究性）</strong><p>{{ selectedReport.severity?.basis }}</p></div>
               </header>
-              <div class="probability-chart report-probability-chart" aria-label="0、1、2 诊断概率柱状图">
+              <div class="probability-chart report-probability-chart" aria-label="步态模型 0、1、2 三分类概率柱状图">
                 <div class="chart-y-axis">
                   <span v-for="tick in [100, 75, 50, 25, 0]" :key="tick">{{ tick }}%</span>
                 </div>

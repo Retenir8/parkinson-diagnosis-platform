@@ -2,6 +2,7 @@
 import {
   ClipboardPlus,
   FileText,
+  Footprints,
   Scissors,
   Settings,
   ShieldCheck,
@@ -28,6 +29,12 @@ const navItems = [
     label: "采集评估",
     description: "多模态推理工作台",
     icon: ClipboardPlus,
+  },
+  {
+    to: "/shoes",
+    label: "智能鞋采集",
+    description: "压力、轨迹与会话归档",
+    icon: Footprints,
   },
   {
     to: "/video-segmentation",

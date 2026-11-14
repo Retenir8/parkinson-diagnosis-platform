@@ -3,6 +3,7 @@ import { CircleAlert } from "@lucide/vue";
 
 import MotionTaskResult from "@/components/MotionTaskResult.vue";
 import OverallPostureResult from "@/components/OverallPostureResult.vue";
+import SmartInsoleResult from "@/components/SmartInsoleResult.vue";
 import type { ModuleResult } from "@/types/domain";
 import { formatMetric, metricLabel } from "@/utils/clinicalMetrics";
 
@@ -25,6 +26,11 @@ function hasTasks(result: ModuleResult) {
 <template>
   <OverallPostureResult
     v-if="moduleId === 'overall-posture'"
+    :assessment-id="assessmentId"
+    :result="result"
+  />
+  <SmartInsoleResult
+    v-else-if="moduleId === 'smart-insole'"
     :assessment-id="assessmentId"
     :result="result"
   />

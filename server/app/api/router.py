@@ -10,6 +10,7 @@ from app.api.routes import (
     patients,
     reports,
     segmentation,
+    shoes,
 )
 
 
@@ -21,3 +22,4 @@ api_router.include_router(modules.router)
 api_router.include_router(assessments.router)
 api_router.include_router(reports.router)
 api_router.include_router(segmentation.router)
+api_router.include_router(shoes.router)

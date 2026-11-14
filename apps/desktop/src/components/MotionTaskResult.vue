@@ -273,14 +273,14 @@ watch(videoUrl, () => {
       <header>
         <span><Activity :size="17" /></span>
         <div>
-          <small>{{ finalScoreVisible ? "动作结束 · 评分已即时生成" : "动作进行中 · 实时识别" }}</small>
+          <small>{{ finalScoreVisible ? "回放结束 · 展示已计算评分" : "视频回放中 · 同步展示逐帧结果" }}</small>
           <strong>
             {{ (selectedSegment?.side ?? selectedVideo?.side) === "left" ? (moduleId === "leg-motion" ? "左侧 · " : "左手 · ") : (selectedSegment?.side ?? selectedVideo?.side) === "right" ? (moduleId === "leg-motion" ? "右侧 · " : "右手 · ") : "" }}{{ TASK_NAMES[activeTaskKey] ?? activeTaskKey }}
           </strong>
         </div>
       </header>
       <div v-if="finalScoreVisible" class="score-reveal-banner">
-        <span class="live-dot" />本动作评分已生成
+        <span class="live-dot" />本动作评分已显示
       </div>
       <div v-if="finalScoreVisible" class="motion-live-score-sides score-reveal" :class="{ 'single-side': displayedSideKeys.length === 1 }">
         <section v-for="side in displayedSideKeys" :key="side">
@@ -307,7 +307,7 @@ watch(videoUrl, () => {
         <div><dt>速度变化比</dt><dd>{{ finalMetricValues("speed_ratio", true) }}</dd></div>
         <div><dt>幅度递减等级</dt><dd>{{ finalMetricValues("amplitude_decrease_level") }}</dd></div>
       </dl>
-      <p>{{ finalScoreVisible ? "当前动作录像与评分可作为一个完整片段保留或裁剪。" : "评分将在本动作视频播放结束后立即显示。" }}</p>
+      <p>{{ finalScoreVisible ? "当前动作录像与评分可作为一个完整片段保留或裁剪。" : "回放结束后展示已计算的评分。" }}</p>
     </aside>
     </div>
     <div

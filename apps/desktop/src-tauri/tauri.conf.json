@@ -25,9 +25,9 @@
     "security": {
       "csp": {
         "default-src": "'self' customprotocol: asset:",
-        "connect-src": "ipc: http://ipc.localhost http://127.0.0.1:8000",
-        "img-src": "'self' asset: http://asset.localhost blob: data:",
-        "media-src": "'self' asset: http://asset.localhost blob: data:",
+        "connect-src": "ipc: http://ipc.localhost http://127.0.0.1:*",
+        "img-src": "'self' asset: http://asset.localhost http://127.0.0.1:* blob: data:",
+        "media-src": "'self' asset: http://asset.localhost http://127.0.0.1:* blob: data:",
         "style-src": "'self' 'unsafe-inline'"
       }
     }
@@ -35,6 +35,8 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
+    "useLocalToolsDir": true,
+    "externalBin": ["binaries/medvision-server"],
     "shortDescription": "本地多模态运动功能评估工作台"
   }
 }

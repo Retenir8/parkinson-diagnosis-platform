@@ -3,6 +3,8 @@ import type {
   Assessment,
   HealthStatus,
   ModelModuleDescriptor,
+  ShoesRuntimeStatus,
+  ShoesSession,
   Patient,
   PatientCreate,
   ReportDetail,
@@ -11,8 +13,23 @@ import type {
   VideoSegment,
 } from "@/types/domain";
 
-const API_BASE =
+let API_BASE =
   import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000/api/v1";
+let desktopToken = "";
+
+export function configureDesktopConnection(apiBase: string, token: string) {
+  if (!/^http:\/\/127\.0\.0\.1:\d+\/api\/v1$/.test(apiBase) || !token) {
+    throw new Error("桌面服务连接信息无效。");
+  }
+  API_BASE = apiBase;
+  desktopToken = token;
+}
+
+function mediaTokenQuery(): string {
+  return desktopToken
+    ? `desktop_token=${encodeURIComponent(desktopToken)}`
+    : "";
+}
 
 export class ApiError extends Error {
   constructor(
@@ -33,6 +50,7 @@ async function request<T>(
   if (init.body && !(init.body instanceof FormData)) {
     headers.set("Content-Type", "application/json");
   }
+  if (desktopToken) headers.set("X-Medvision-Token", desktopToken);
 
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
@@ -77,6 +95,20 @@ export const api = {
     request<Patient>(`/patients/${patientId}`),
 
   listModules: () => request<ModelModuleDescriptor[]>("/modules"),
+
+  shoesRuntime: () => request<ShoesRuntimeStatus>("/shoes/runtime"),
+  startShoesRuntime: () => request<ShoesRuntimeStatus>("/shoes/runtime/start", { method: "POST" }),
+  sendShoesCommand: (command: string) =>
+    request<{ queued: string; status: ShoesRuntimeStatus }>(
+      `/shoes/runtime/commands/${encodeURIComponent(command)}`,
+      { method: "POST" },
+    ),
+  listShoesSessions: () => request<ShoesSession[]>("/shoes/sessions"),
+  registerShoesSession: (stamp: string, patientId: string) =>
+    request<Artifact[]>(`/shoes/sessions/${encodeURIComponent(stamp)}/register`, {
+      method: "POST",
+      body: JSON.stringify({ patient_id: patientId }),
+    }),
 
   listArtifacts: (patientId: string) =>
     request<Artifact[]>(`/patients/${patientId}/artifacts`),
@@ -171,15 +203,17 @@ export function assessmentOutputUrl(
   moduleId: string,
   artifactIndex: number,
 ): string {
-  return `${API_BASE}/assessments/${encodeURIComponent(
+  const url = `${API_BASE}/assessments/${encodeURIComponent(
     assessmentId,
   )}/modules/${encodeURIComponent(moduleId)}/outputs/${artifactIndex}`;
+  return desktopToken ? `${url}?${mediaTokenQuery()}` : url;
 }
 
 export function segmentationPreviewUrl(project: SegmentationProject): string {
-  return `${API_BASE}/segmentation-projects/${project.id}/preview?v=${encodeURIComponent(
+  const url = `${API_BASE}/segmentation-projects/${project.id}/preview?v=${encodeURIComponent(
     project.updated_at,
   )}`;
+  return desktopToken ? `${url}&${mediaTokenQuery()}` : url;
 }
 
 export function uploadSegmentationProject(
@@ -194,6 +228,7 @@ export function uploadSegmentationProject(
 
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `${API_BASE}/segmentation-projects/upload`);
+    if (desktopToken) xhr.setRequestHeader("X-Medvision-Token", desktopToken);
     xhr.responseType = "json";
 
     xhr.upload.addEventListener("progress", (event) => {
@@ -234,6 +269,7 @@ export function uploadPatientArtifact(
 
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `${API_BASE}/patients/${patientId}/artifacts/upload`);
+    if (desktopToken) xhr.setRequestHeader("X-Medvision-Token", desktopToken);
     xhr.responseType = "json";
 
     xhr.upload.addEventListener("progress", (event) => {

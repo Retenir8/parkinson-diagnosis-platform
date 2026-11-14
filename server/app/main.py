@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import os
+import secrets
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.requests import Request
+from fastapi.responses import JSONResponse
 
 from app.api.router import api_router
 from app.core.config import get_settings
@@ -21,9 +26,24 @@ app.add_middleware(
     allow_origins=list(settings.allowed_origins),
     allow_credentials=False,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Content-Type", "X-Medvision-Token"],
 )
 app.include_router(api_router)
+
+desktop_token = os.getenv("MEDVISION_DESKTOP_TOKEN")
+if desktop_token:
+    @app.middleware("http")
+    async def require_desktop_token(request: Request, call_next):
+        if request.method == "OPTIONS":
+            return await call_next(request)
+        supplied = (
+            request.headers.get("X-Medvision-Token")
+            or request.query_params.get("desktop_token")
+            or ""
+        )
+        if not secrets.compare_digest(supplied, desktop_token):
+            return JSONResponse(status_code=403, content={"detail": "桌面会话验证失败。"})
+        return await call_next(request)
 
 
 @app.get("/", include_in_schema=False)

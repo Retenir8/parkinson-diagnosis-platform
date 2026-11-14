@@ -494,7 +494,7 @@ def _parse_segment_manifest(path: Path) -> Tuple[List[Dict[str, Any]], Optional[
 
     与整体姿态一致：列 segment_id/label/task_type/side/start_s/end_s，
     时间以视频第一帧为 0 基准；要求不重叠、ID 唯一。
-    JSON 顶层可携带 crop_region（[x, y, w, h]）作用于整段视频。
+    JSON 顶层 crop_region 或 CSV 的 crop_x/y/w/h 可指定整段视频裁剪区域。
     返回 (按 start_s 排序的分段列表, crop_region 或 None)。
     """
     crop_region: Optional[tuple] = None
@@ -525,6 +525,21 @@ def _parse_segment_manifest(path: Path) -> Tuple[List[Dict[str, Any]], Optional[
     else:
         with path.open("r", newline="", encoding="utf-8-sig") as handle:
             rows = list(csv.DictReader(handle))
+        crop_fields = ("crop_x", "crop_y", "crop_w", "crop_h")
+        crops: set[tuple[int, int, int, int]] = set()
+        for row in rows:
+            supplied = [row.get(field) not in (None, "") for field in crop_fields]
+            if any(supplied) and not all(supplied):
+                raise ValueError("CSV 裁剪区域必须同时包含 crop_x/crop_y/crop_w/crop_h")
+            if all(supplied):
+                crops.add(tuple(int(row[field]) for field in crop_fields))
+        if len(crops) > 1:
+            raise ValueError("CSV 中各片段的裁剪区域不一致")
+        if crops:
+            crop_region = next(iter(crops))
+            x, y, width, height = crop_region
+            if x < 0 or y < 0 or width <= 0 or height <= 0:
+                raise ValueError("裁剪区域必须满足 x/y≥0 且宽高>0")
 
     required = {"segment_id", "label", "task_type", "start_s", "end_s"}
     segments: List[Dict[str, Any]] = []

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.modules.base import InferenceModule
-from app.modules.providers.external import insole_module
+from app.modules.providers.smart_insole import SmartInsoleModule
 from app.modules.providers.hand_motion import HandMotionModule
 from app.modules.providers.leg_motion import LegMotionModule
 from app.modules.providers.overall_posture import OverallPostureModule
@@ -14,7 +14,7 @@ class ModuleRegistry:
             OverallPostureModule(),
             HandMotionModule(),
             LegMotionModule(),
-            insole_module(),
+            SmartInsoleModule(),
         ]
         self._modules = {
             module.descriptor().id: module for module in registered

@@ -20,15 +20,18 @@ System/
 |---|---|---|---|
 | **整体姿态** | `overall-posture` | ✅ 已接入 | RealSense walk 片段 → 17 特征 → NP3GAIT 0/1/2 三分类 |
 | **手部运动** | `hand-motion` | ✅ 已接入 | 手指对指 / 手掌轮替 / 握拳，三任务共享 MediaPipe Hands |
-| **腿部运动** | `leg-motion` | ✅ 已接入 | 脚趾拍地 / 抬腿灵活性，各用独立视频 + MediaPipe Pose |
-| 智能鞋垫 | `smart-insole` | ⏳ 待提供 | 等待硬件协议和字段定义 |
+| **腿部运动** | `leg-motion` | ✅ 已接入 | 脚趾拍地 / 抬腿灵活性；完整视频分段或独立视频 + MediaPipe Pose |
+| **智能鞋垫** | `smart-insole` | ✅ 会话接入与独立程序编译自检 | 原 Shoes 算法可由 MATLAB 或 MATLAB Compiler 生成的独立程序运行；完整会话 CSV/TXT 可归档、展示和进入患者评估。实时硬件链与完整安装包仍需验收。 |
 
 整姿态、手部和腿部模块已实现独立推理和结果 JSON。详见 [整体姿态接入文档](docs/MODEL_INTEGRATION_OVERALL.md)、[手部接入文档](docs/MODEL_INTEGRATION_HAND.md) 和 [腿部接入文档](docs/MODEL_INTEGRATION_LEG.md)。
 
+智能鞋模块的源码同步、实时控制、数据契约与验收范围见 [Shoes 接入文档](docs/MODEL_INTEGRATION_SHOES.md)。
+
 主要能力：
 
-- **手部/腿部可视化**：推理产物为 VP8/WebM 标注视频（骨架、计数、状态、时间轴），前端单窗口播放 + 下拉切换分段。
+- **手部/腿部可视化**：推理产物为 VP8/WebM 骨架视频；计数、状态、时间轴及评分由前端同步展示。
 - **手部分段模式**：可上传 `segments.json`（含 `segment_id/label/task_type/start_s/end_s` 与可选顶层 `crop_region`），每段只运行对应动作的检测与评分。
+- **腿部输入模式**：一段完整视频配 `segments.csv/json` 指定动作与左右侧；或按动作分别上传左右侧独立视频。旧版每动作一个双侧视频仍可读取，模式不可混用。
 - **MDS-UPDRS 评分**：停顿（1.5 s）/ 冻结（3.0 s）/ 速度衰减 / 幅度衰减 → 0-4 级，总评 = `ceil((停顿 + 速度 + 幅度) / 3)`。
 - **存储去重与清理**：同内容文件硬链接去重（`content_index.json`）、资料/分割项目/评估/输出的 DELETE 接口。
 - **页面状态保持**：采集评估页 KeepAlive 缓存，切换页面后推理进度、文件列表不丢失。
@@ -72,13 +75,20 @@ npm run setup:frontend
 # 先确认 Rust/Cargo 已进入 PATH
 cargo --version
 
-# 构建 NSIS 桌面安装包
-cd System
+# 安装桌面后端打包依赖（仅首次）
+cd System\server
+.\.venv\Scripts\python.exe -m pip install -r requirements-desktop.txt
+
+# 构建带 Python 后端的 NSIS 桌面安装包
+cd ..
 npm run build:desktop
 ```
 
 若提示 `failed to run cargo metadata: program not found`，说明当前终端尚未安装
 Rust，或安装后尚未重启终端使 `cargo` 进入 `PATH`；这不是 Vue/Tauri 源码错误。
+桌面版共用浏览器端 Vue 界面，发布包自动启动本地 Python 服务。发布版可在“系统设置”
+选择患者数据目录，重启后生效且不会自动迁移旧资料。数据目录、模型资源、
+智能鞋外部运行环境和发布核验见 [桌面打包说明](docs/DESKTOP_PACKAGING.md)。
 
 ## 浏览器开发
 

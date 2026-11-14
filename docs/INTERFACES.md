@@ -59,11 +59,13 @@ class InferenceModule:
 | 整体姿态 | `overall-posture` | `walk_source` | realsense_bag |
 | 整体姿态 | `overall-posture` | `segment_manifest` | tabular (CSV / JSON) |
 | 手部 | `hand-motion` | `hand_video` | video |
+| 腿部 | `leg-motion` | `leg_video` + `leg_segment_manifest` | video / realsense_bag + CSV / JSON |
+| 腿部 | `leg-motion` | `{toe_tapping,leg_agility}_{left,right}_video` | video / realsense_bag |
 | 腿部 | `leg-motion` | `toe_tapping_video` | video / realsense_bag |
 | 腿部 | `leg-motion` | `leg_agility_video` | video / realsense_bag |
 | 智能鞋垫 | `smart-insole` | `insole_data` | insole_timeseries / tabular |
 
-这些槽位只定义路由关系，不定义动作、视角、文件内部结构或模型预处理。负责人接入时可以增加、删除或修改自己的输入槽。
+腿部有三种互斥输入方式：完整视频加清单、四个左右侧独立视频、旧版两个双侧视频。独立视频模式可另传 `toe_tapping_manifest` 和 `leg_agility_manifest` 裁剪清单。其余槽位只定义路由关系，不定义动作、视角、文件内部结构或模型预处理。负责人接入时可以增加、删除或修改自己的输入槽。
 
 评估创建请求使用嵌套映射：
 
@@ -165,8 +167,8 @@ AssessmentRepository.merge_module_runs(
 - `end_s > start_s >= 0`，且不能超过视频时长；
 - 当前界面拒绝时间重叠的片段；
 - 时间基准是原始文件第一帧，与 `analyze_bag_segments.py` 一致；
-- 页面提供整体姿态 `walk`、`turn`、`stand`、`other` 和手部 `finger_opposition`、`hand_alternation`、`fist_clenching` 以及自定义 `task_type` 选择，但只负责写入字段，不赋予或假设模型评分含义；
-- `segments.json` 顶层可记录 `walk_distance_m`（供整体姿态 `SP_U` 计算）和 `crop_region: [x, y, w, h]`（供手部模块裁剪检测区域）；
+- 页面提供整体姿态 `walk`、`turn`、`stand`、`other`，手部 `finger_opposition`、`hand_alternation`、`fist_clenching`，腿部 `toe_tapping`、`leg_agility` 以及自定义 `task_type` 选择；手腿任务可指定 `side=left/right`；
+- `segments.json` 顶层可记录 `walk_distance_m`（供整体姿态 `SP_U` 计算）和 `crop_region: [x, y, w, h]`（供步行、手部、腿部模块限定检测区域）；CSV 中裁剪区域使用 `crop_x/y/w/h` 列；
 - 保存时同时生成 `segments.csv` 和 `segments.json`，与原始文件、预览文件、`project.json` 放在 `data/video_segments/<项目目录>/`。
 
 ## 各模块接入状态与待确认事项
@@ -198,20 +200,15 @@ AssessmentRepository.merge_module_runs(
 已接入（`leg-motion`），见 [MODEL_INTEGRATION_LEG.md](MODEL_INTEGRATION_LEG.md)：
 
 1. 纯规则状态机，基于 MediaPipe Pose 关键点；
-2. 两个独立输入槽 `toe_tapping_video` / `leg_agility_video`，各对应一个任务；
+2. 推荐 `leg_video` + `leg_segment_manifest` 指定每段动作和执行侧；也支持四个左右侧独立视频，保留 `toe_tapping_video` / `leg_agility_video` 旧版双侧视频兼容；三种方式不可混用；
 3. 输出两任务×左右侧 MDS-UPDRS 0-4 评分；
 4. 每个任务生成 VP8/WebM 标注视频，通过 `output_artifacts` 受限接口访问。
 
 ### 智能鞋垫
 
-等待硬件和算法负责人提供：
+已接入原 Shoes MATLAB 实现。`insole_data` 接收同一会话的十类 CSV/TXT 文件；`smart-insole` 适配器保留原始文件并把已有压力、步态事件、轨迹和单步指标映射为 `ModuleResult`。实时链由 System 页面启动原 MATLAB 程序，并经桥接文件发送既有校准/记录命令。具体文件角色、算法等价性测试和操作见 [Shoes 接入文档](MODEL_INTEGRATION_SHOES.md)。
 
-1. 文件格式或实时通信协议；
-2. 字段名、单位、时间戳、采样率和传感器布局；
-3. 左右脚同步方式、设备校准和零点处理；
-4. 丢包/缺失数据定义；
-5. 压力图坐标映射；
-6. 评分、指标及与视频时间轴对齐方式。
+仍需现场确认真实硬件连续采集、鞋端时间与视频时间轴的共同基准，以及任何临床评分规则；当前模块不生成临床分数。
 
 ## 报告接口与分层边界
 

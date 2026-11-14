@@ -1,11 +1,11 @@
 """
 腿部运动分析推理模块 (MDS-UPDRS 3.7 / 3.8)
 ==========================================
-集成两个腿部动作评分器——每个动作独立一个视频、独立检测、独立评分：
-- 脚趾拍地 (Toe Tapping)  — MDS-UPDRS 3.7 → slot: toe_tapping_video
-- 腿部灵活性 (Leg Agility) — MDS-UPDRS 3.8 → slot: leg_agility_video
+集成两个腿部动作评分器；支持合并视频分段、左右侧独立视频和旧版双侧视频：
+- 脚趾拍地 (Toe Tapping)  — MDS-UPDRS 3.7
+- 腿部灵活性 (Leg Agility) — MDS-UPDRS 3.8
 
-无头模式：不产生 OpenCV 窗口，每个任务生成一段 VP8/WebM 标注视频。
+无头模式：不产生 OpenCV 窗口，每个视频片段生成 VP8/WebM 标注视频。
 """
 
 from __future__ import annotations
@@ -61,7 +61,26 @@ def _parse_leg_segment_manifest(path: Path) -> Tuple[List[Dict[str, Any]], Optio
             rows = list(csv.DictReader(handle))
     if not isinstance(rows, list):
         raise ValueError("segments 必须是数组")
+    if path.suffix.lower() == ".csv":
+        crop_fields = ("crop_x", "crop_y", "crop_w", "crop_h")
+        crops: set[tuple[int, int, int, int]] = set()
+        for row in rows:
+            supplied = [row.get(field) not in (None, "") for field in crop_fields]
+            if any(supplied) and not all(supplied):
+                raise ValueError("CSV 裁剪区域必须同时包含 crop_x/crop_y/crop_w/crop_h")
+            if all(supplied):
+                crops.add(tuple(int(row[field]) for field in crop_fields))
+        if len(crops) > 1:
+            raise ValueError("CSV 中各片段的裁剪区域不一致")
+        if crops:
+            crop_region = next(iter(crops))
+    if crop_region is not None:
+        x, y, width, height = crop_region
+        if x < 0 or y < 0 or width <= 0 or height <= 0:
+            raise ValueError("裁剪区域必须满足 x/y≥0 且宽高>0")
     segments: List[Dict[str, Any]] = []
+    ids: set[str] = set()
+    task_sides: set[tuple[str, str]] = set()
     for index, row in enumerate(rows, start=1):
         if not isinstance(row, dict):
             raise ValueError(f"第 {index} 个分段不是对象")
@@ -73,10 +92,22 @@ def _parse_leg_segment_manifest(path: Path) -> Tuple[List[Dict[str, Any]], Optio
             raise ValueError(f"第 {index} 个腿部分段必须选择 left/right")
         start_s = float(row.get("start_s", -1))
         end_s = float(row.get("end_s", -1))
-        if start_s < 0 or end_s <= start_s:
+        if (
+            not math.isfinite(start_s)
+            or not math.isfinite(end_s)
+            or start_s < 0
+            or end_s <= start_s
+        ):
             raise ValueError(f"第 {index} 个腿部分段时间范围无效")
+        segment_id = str(row.get("segment_id", "")).strip()
+        if not segment_id or segment_id in ids:
+            raise ValueError(f"第 {index} 个腿部分段 ID 为空或重复：{segment_id}")
+        if (task_type, side) in task_sides:
+            raise ValueError(f"{task_type}/{side} 存在多个片段，当前每项只支持一个片段")
+        ids.add(segment_id)
+        task_sides.add((task_type, side))
         segments.append({
-            "segment_id": str(row.get("segment_id", index)).strip(),
+            "segment_id": segment_id,
             "label": str(row.get("label", task_type)).strip(),
             "task_type": task_type,
             "side": side,
@@ -85,7 +116,13 @@ def _parse_leg_segment_manifest(path: Path) -> Tuple[List[Dict[str, Any]], Optio
         })
     if not segments:
         raise ValueError("分段清单中没有腿部动作片段")
-    return sorted(segments, key=lambda item: item["start_s"]), crop_region
+    segments.sort(key=lambda item: item["start_s"])
+    for previous, current in zip(segments, segments[1:]):
+        if current["start_s"] < previous["end_s"]:
+            raise ValueError(
+                f"片段 {previous['segment_id']} 与 {current['segment_id']} 时间重叠"
+            )
+    return segments, crop_region
 VIDEO_SUFFIXES = frozenset(
     {".bag", ".avi", ".mp4", ".mov", ".mkv", ".webm", ".m4v"}
 )
@@ -120,11 +157,13 @@ def _parse_crop_manifest(
             str(row.get("task_type", "")).strip().lower() for row in rows
         }
         crop_fields = ("crop_x", "crop_y", "crop_w", "crop_h")
-        crops = {
-            tuple(int(row[field]) for field in crop_fields)
-            for row in rows
-            if all(row.get(field) not in (None, "") for field in crop_fields)
-        }
+        crops: set[tuple[int, int, int, int]] = set()
+        for row in rows:
+            supplied = [row.get(field) not in (None, "") for field in crop_fields]
+            if any(supplied) and not all(supplied):
+                raise ValueError("CSV 裁剪区域必须同时包含 crop_x/crop_y/crop_w/crop_h")
+            if all(supplied):
+                crops.add(tuple(int(row[field]) for field in crop_fields))
         if len(crops) > 1:
             raise ValueError("CSV 中各片段的裁剪区域不一致")
         if crops:
@@ -403,6 +442,11 @@ def _process_one_task(
                 ci = np.ascontiguousarray(np.asanyarray(cf.get_data()))
                 if cfg.crop_region:
                     x, y, w, h = cfg.crop_region
+                    frame_h, frame_w = ci.shape[:2]
+                    if x + w > frame_w or y + h > frame_h:
+                        raise ValueError(
+                            f"裁剪区域超出视频画面：{cfg.crop_region}，画面={frame_w}x{frame_h}"
+                        )
                     ci = ci[y:y + h, x:x + w]
                 return ci, df, ts, True
 
@@ -433,6 +477,11 @@ def _process_one_task(
                 return None
             if cfg.crop_region:
                 x, y, w, h = cfg.crop_region
+                frame_h, frame_w = frame.shape[:2]
+                if x + w > frame_w or y + h > frame_h:
+                    raise ValueError(
+                        f"裁剪区域超出视频画面：{cfg.crop_region}，画面={frame_w}x{frame_h}"
+                    )
                 frame = frame[y:y + h, x:x + w]
             return frame, None, cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0, False
 
@@ -692,7 +741,7 @@ def _process_one_task(
 # ============================================================================
 
 class LegMotionModule(InferenceModule):
-    """Leg motion analysis — one video per task, two independent slots."""
+    """Leg motion analysis with mutually exclusive combined and independent modes."""
 
     REQUIRED_ACTIONS = 10
 
@@ -761,7 +810,7 @@ class LegMotionModule(InferenceModule):
             status="ready",
             status_detail=(
                 "已集成两个腿部动作评分器。"
-                "两个任务均按左侧、右侧独立视频采集与评分。"
+                "可使用完整视频分段、左右侧独立视频或旧版双侧视频。"
             ),
             input_kinds=["realsense_bag", "video"],
             input_slots=[
@@ -773,7 +822,7 @@ class LegMotionModule(InferenceModule):
                         "通过分段清单指定每段动作与执行侧。"
                     ),
                     accepted_kinds=["realsense_bag", "video"],
-                    required=True,
+                    required=False,
                     multiple=False,
                 ),
                 InputSlotDescriptor(
@@ -783,9 +832,52 @@ class LegMotionModule(InferenceModule):
                         "视频分割页导出的 CSV/JSON；每段选择脚趾拍地/抬腿及左侧/右侧。"
                     ),
                     accepted_kinds=["tabular"],
-                    required=True,
+                    required=False,
                     multiple=False,
                 ),
+                *[
+                    InputSlotDescriptor(
+                        key=f"{task_id}_{side}_video",
+                        label=f"{task_label}（{'左侧' if side == 'left' else '右侧'}）",
+                        description="独立视频模式：每个动作的左右侧分别上传。",
+                        accepted_kinds=["realsense_bag", "video"],
+                        required=False,
+                        multiple=False,
+                    )
+                    for task_id, task_label in (
+                        (self.TOE_TAPPING, "脚趾拍地"),
+                        (self.LEG_AGILITY, "抬腿灵活性"),
+                    )
+                    for side in ("left", "right")
+                ],
+                *[
+                    InputSlotDescriptor(
+                        key=f"{task_id}_video",
+                        label=f"{task_label}（旧版双侧视频）",
+                        description="兼容原有评估记录；一个视频分析该动作的左右两侧。",
+                        accepted_kinds=["realsense_bag", "video"],
+                        required=False,
+                        multiple=False,
+                    )
+                    for task_id, task_label in (
+                        (self.TOE_TAPPING, "脚趾拍地"),
+                        (self.LEG_AGILITY, "抬腿灵活性"),
+                    )
+                ],
+                *[
+                    InputSlotDescriptor(
+                        key=f"{task_id}_manifest",
+                        label=f"{task_label}裁剪清单",
+                        description="独立视频模式可选；提供时按清单中的裁剪区域分析。",
+                        accepted_kinds=["tabular"],
+                        required=False,
+                        multiple=False,
+                    )
+                    for task_id, task_label in (
+                        (self.TOE_TAPPING, "脚趾拍地"),
+                        (self.LEG_AGILITY, "抬腿灵活性"),
+                    )
+                ],
             ],
             output_capabilities=[
                 "mds_updrs_scores",
@@ -811,9 +903,37 @@ class LegMotionModule(InferenceModule):
         if combined_present:
             if not request.inputs.get("leg_segment_manifest"):
                 issues.append("缺少必需输入槽：leg_segment_manifest")
+            if any(
+                request.inputs.get(slot) for slot in video_slots - {"leg_video"}
+            ):
+                issues.append("完整视频模式不能同时上传独立任务视频")
+            if any(
+                request.inputs.get(slot)
+                for slot in ("toe_tapping_manifest", "leg_agility_manifest")
+            ):
+                issues.append("完整视频模式不能同时上传独立任务裁剪清单")
         else:
+            if request.inputs.get("leg_segment_manifest"):
+                issues.append("leg_segment_manifest 必须与 leg_video 配对")
+            legacy_mode = any(
+                request.inputs.get(f"{task_id}_video")
+                for task_id in (self.TOE_TAPPING, self.LEG_AGILITY)
+            )
+            side_mode = any(
+                request.inputs.get(f"{task_id}_{side}_video")
+                for task_id in (self.TOE_TAPPING, self.LEG_AGILITY)
+                for side in ("left", "right")
+            )
+            if legacy_mode and side_mode:
+                issues.append("旧版双侧视频与左右侧独立视频模式不能混用")
             for task_id in (self.TOE_TAPPING, self.LEG_AGILITY):
                 legacy_present = bool(request.inputs.get(f"{task_id}_video"))
+                side_present = any(
+                    request.inputs.get(f"{task_id}_{side}_video")
+                    for side in ("left", "right")
+                )
+                if legacy_present and side_present:
+                    issues.append(f"{task_id} 旧版双侧视频不能与独立左右侧视频混用")
                 for side in ("left", "right"):
                     side_key = f"{task_id}_{side}_video"
                     if not legacy_present and not request.inputs.get(side_key):

@@ -19,6 +19,10 @@ server/tmp/
 # Local clinical data: never commit patient information or source media.
 data/*
 !data/README.md
+integrations/shoes_reference/data/
+integrations/shoes_reference/diagnostics/
+integrations/shoes_reference/docs/
+integrations/shoes_reference/third_party/
 
 # Desktop/build artifacts
 *.exe

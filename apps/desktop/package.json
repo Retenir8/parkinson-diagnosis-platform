@@ -10,17 +10,18 @@
     "dev:backend:system": "cd ../../server && python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000",
     "dev:browser": "concurrently -k -n API,WEB -c cyan,blue \"npm:dev:backend\" \"npm:dev:web\"",
     "dev:browser:system": "concurrently -k -n API,WEB -c cyan,blue \"npm:dev:backend:system\" \"npm:dev:web\"",
-    "dev:desktop": "concurrently -k -n API,DESKTOP -c cyan,magenta \"npm:dev:backend\" \"npm:tauri:dev\"",
+    "dev:desktop": "npm run build:server-sidecar -- --if-missing && concurrently -k -n API,DESKTOP -c cyan,magenta \"npm:dev:backend\" \"npm:tauri:dev\"",
     "tauri:dev": "tauri dev",
     "build": "vue-tsc -b && vite build",
-    "build:desktop": "tauri build",
+    "build:server-sidecar": "cd ../../server && .venv\\Scripts\\python.exe tools\\build_desktop_sidecar.py",
+    "build:desktop": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-desktop.ps1",
     "typecheck": "vue-tsc -b",
     "tauri": "tauri"
   },
   "dependencies": {
     "@lucide/vue": "^1.27.0",
-    "@tauri-apps/api": "^2.0.0",
-    "@tauri-apps/plugin-dialog": "^2.0.0",
+    "@tauri-apps/api": "2.12.2",
+    "@tauri-apps/plugin-dialog": "2.8.1",
     "pinia": "^3.0.0",
     "vue": "^3.5.0",
     "vue-router": "^4.5.0"

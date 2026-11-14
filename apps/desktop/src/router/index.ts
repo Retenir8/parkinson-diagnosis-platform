@@ -1,9 +1,9 @@
-import { createRouter, createWebHistory } from "vue-router";
+import { createRouter, createWebHashHistory, createWebHistory } from "vue-router";
 
 import AppShell from "@/layouts/AppShell.vue";
 
 const router = createRouter({
-  history: createWebHistory(),
+  history: window.__TAURI_INTERNALS__ ? createWebHashHistory() : createWebHistory(),
   routes: [
     {
       path: "/",
@@ -26,6 +26,15 @@ const router = createRouter({
           meta: {
             title: "采集评估",
             subtitle: "组织多模态数据并调度分析模块",
+          },
+        },
+        {
+          path: "shoes",
+          name: "shoes",
+          component: () => import("@/views/ShoesView.vue"),
+          meta: {
+            title: "智能鞋采集",
+            subtitle: "双脚压力和惯性步态会话",
           },
         },
         {

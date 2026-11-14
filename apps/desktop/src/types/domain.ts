@@ -103,6 +103,30 @@ export interface ModuleResult {
   warnings: string[];
 }
 
+export interface ShoesRuntimeStatus {
+  running: boolean;
+  engine: "compiled-matlab" | "matlab";
+  pid: number | null;
+  exit_code: number | null;
+  session_stamp: string | null;
+  phase: string;
+  latest_gait: Record<string, string> | null;
+  latest_gait_by_foot: Record<string, Record<string, string>>;
+  pressure_history_by_foot: Record<string, Record<string, string>[]>;
+  latest_step: Record<string, string> | null;
+  step_history: Record<string, string>[];
+  latest_trajectory: Record<string, string> | null;
+  trajectory_history: Record<string, string>[];
+  imu_history_by_foot: Record<string, Record<string, string>[]>;
+  alignment: Record<string, string> | null;
+}
+
+export interface ShoesSession {
+  session_stamp: string;
+  file_count: number;
+  active: boolean;
+}
+
 export interface ModuleRunRecord {
   module_id: string;
   status:

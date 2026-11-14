@@ -61,6 +61,20 @@ const actionError = ref("");
 const assessment = ref<Assessment | null>(null);
 const refreshingResult = ref(false);
 const isTauri = Boolean(window.__TAURI_INTERNALS__);
+type LegInputMode = "combined" | "separate" | "legacy";
+const legInputMode = ref<LegInputMode>("combined");
+const legModeSlots: Record<LegInputMode, readonly string[]> = {
+  combined: ["leg_video", "leg_segment_manifest"],
+  separate: [
+    "toe_tapping_left_video", "toe_tapping_right_video",
+    "leg_agility_left_video", "leg_agility_right_video",
+    "toe_tapping_manifest", "leg_agility_manifest",
+  ],
+  legacy: [
+    "toe_tapping_video", "leg_agility_video",
+    "toe_tapping_manifest", "leg_agility_manifest",
+  ],
+};
 
 const selectedPatient = computed(() => patients.selectedPatient);
 const selectedModuleCount = computed(
@@ -105,10 +119,28 @@ function compactSlotLabel(slot: InputSlotDescriptor) {
   return compactSlotLabels[slot.key] ?? slot.label;
 }
 
+function visibleInputSlots(module: ModelModuleDescriptor) {
+  if (module.id !== "leg-motion") return module.input_slots;
+  return module.input_slots.filter((slot) =>
+    legModeSlots[legInputMode.value].includes(slot.key),
+  );
+}
+
+function isRequiredInput(moduleId: string, slot: InputSlotDescriptor) {
+  if (moduleId !== "leg-motion") return slot.required;
+  return !slot.key.endsWith("_manifest") || slot.key === "leg_segment_manifest";
+}
+
+function changeLegInputMode(event: Event) {
+  legInputMode.value = (event.target as HTMLSelectElement).value as LegInputMode;
+  sources.value = sources.value.filter((source) => source.moduleId !== "leg-motion");
+  assessment.value = null;
+}
+
 function sourceKind(name: string): InputKind {
   const extension = name.split(".").pop()?.toLowerCase();
   if (extension === "bag") return "realsense_bag";
-  if (["mp4", "mov", "avi", "mkv", "webm"].includes(extension ?? "")) {
+  if (["mp4", "mov", "avi", "mkv", "webm", "m4v"].includes(extension ?? "")) {
     return "video";
   }
   if (["csv", "xlsx", "xls", "json", "txt"].includes(extension ?? "")) {
@@ -127,6 +159,7 @@ function readableSize(value?: number) {
 }
 
 function acceptedExtensions(slot: InputSlotDescriptor) {
+  if (slot.key.endsWith("manifest")) return ".csv,.json";
   const extensions = new Set<string>();
   if (slot.accepted_kinds.includes("video")) extensions.add("video/*");
   if (slot.accepted_kinds.includes("realsense_bag")) extensions.add(".bag");
@@ -139,6 +172,14 @@ function acceptedExtensions(slot: InputSlotDescriptor) {
     );
   }
   return Array.from(extensions).join(",");
+}
+
+function acceptsSource(slot: InputSlotDescriptor, name: string) {
+  const extension = name.split(".").pop()?.toLowerCase();
+  return (
+    slot.accepted_kinds.includes(sourceKind(name)) &&
+    (!slot.key.endsWith("manifest") || ["csv", "json"].includes(extension ?? ""))
+  );
 }
 
 function sourcesFor(moduleId: string, slotKey?: string) {
@@ -157,7 +198,7 @@ function addFiles(
   actionError.value = "";
   for (const file of Array.from(fileList)) {
     const kind = sourceKind(file.name);
-    if (!slot.accepted_kinds.includes(kind)) {
+    if (!acceptsSource(slot, file.name)) {
       actionError.value = `${file.name} 的类型 ${kind} 不符合“${slot.label}”接口。`;
       continue;
     }
@@ -229,7 +270,7 @@ async function chooseNativeFiles(
   for (const path of paths) {
     const name = path.split(/[\\/]/).pop() ?? path;
     const kind = sourceKind(name);
-    if (!slot.accepted_kinds.includes(kind)) {
+    if (!acceptsSource(slot, name)) {
       actionError.value = `${name} 的类型 ${kind} 不符合“${slot.label}”接口。`;
       continue;
     }
@@ -309,6 +350,21 @@ async function runInference() {
 
 async function createAssessment() {
   if (!canCreate.value || !selectedPatient.value) return;
+  if (sourcesFor("leg-motion").length) {
+    const legModule = modules.value.find((module) => module.id === "leg-motion");
+    const missing = legModule
+      ? visibleInputSlots(legModule)
+          .filter((slot) =>
+            isRequiredInput("leg-motion", slot) &&
+            sourcesFor("leg-motion", slot.key).length === 0,
+          )
+          .map(compactSlotLabel)
+      : [];
+    if (missing.length) {
+      actionError.value = `腿部${legInputMode.value === "combined" ? "完整视频" : "独立视频"}模式缺少：${missing.join("、")}。`;
+      return;
+    }
+  }
   running.value = true;
   actionError.value = "";
   assessment.value = null;
@@ -525,8 +581,17 @@ onActivated(async () => {
                 <StatusPill :status="module.status" />
               </header>
 
+              <label v-if="module.id === 'leg-motion'" class="field">
+                <span>腿部输入方式（切换时清空已选腿部文件）</span>
+                <select :value="legInputMode" @change="changeLegInputMode">
+                  <option value="combined">完整视频＋分段清单</option>
+                  <option value="separate">四段左右侧独立视频</option>
+                  <option value="legacy">旧版两段双侧视频</option>
+                </select>
+              </label>
+
               <div
-                v-for="slot in module.input_slots"
+                v-for="slot in visibleInputSlots(module)"
                 :key="slot.key"
                 class="input-slot"
               >
@@ -534,7 +599,7 @@ onActivated(async () => {
                   <div>
                     <strong>{{ compactSlotLabel(slot) }}</strong>
                   </div>
-                  <span>{{ slot.required ? "必需" : "可选" }}</span>
+                  <span>{{ isRequiredInput(module.id, slot) ? "必需" : "可选" }}</span>
                 </div>
                 <div
                   class="module-dropzone"

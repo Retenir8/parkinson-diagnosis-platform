@@ -393,6 +393,56 @@ def create_assessment(
 
             normalized_slots[slot_key] = valid_ids
 
+        if module_id == "leg-motion":
+            combined = bool(normalized_slots.get("leg_video"))
+            manifest = bool(normalized_slots.get("leg_segment_manifest"))
+            legacy_mode = any(
+                normalized_slots.get(slot)
+                for slot in ("toe_tapping_video", "leg_agility_video")
+            )
+            side_mode = any(
+                normalized_slots.get(slot)
+                for slot in (
+                    "toe_tapping_left_video", "toe_tapping_right_video",
+                    "leg_agility_left_video", "leg_agility_right_video",
+                )
+            )
+            task_manifests = any(
+                normalized_slots.get(slot)
+                for slot in ("toe_tapping_manifest", "leg_agility_manifest")
+            )
+            if combined != manifest:
+                validation_issues.append({
+                    "module_id": module_id,
+                    "input_slot": "leg_segment_manifest",
+                    "message": "完整腿部视频与分段清单必须同时提供。",
+                })
+            if (
+                (combined and (legacy_mode or side_mode or task_manifests))
+                or (legacy_mode and side_mode)
+            ):
+                validation_issues.append({
+                    "module_id": module_id,
+                    "input_slot": "leg_video",
+                    "message": "腿部完整视频不能附加独立任务文件；左右侧与旧版双侧视频模式也不能混用。",
+                })
+            if not combined:
+                for task_id in ("toe_tapping", "leg_agility"):
+                    legacy = bool(normalized_slots.get(f"{task_id}_video"))
+                    sides = [
+                        bool(normalized_slots.get(f"{task_id}_{side}_video"))
+                        for side in ("left", "right")
+                    ]
+                    if (legacy and any(sides)) or (not legacy and not all(sides)):
+                        validation_issues.append({
+                            "module_id": module_id,
+                            "input_slot": f"{task_id}_video",
+                            "message": (
+                                "该任务请选择一个旧版双侧视频，"
+                                "或分别提供左右侧视频。"
+                            ),
+                        })
+
         normalized_inputs[module_id] = normalized_slots
 
         # Determine initial status based on module readiness

@@ -2177,6 +2177,97 @@ p {
   font-size: 9px !important;
 }
 
+.storage-manager {
+  margin: 0 18px 18px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fbfcfd;
+}
+
+.storage-manager-heading,
+.storage-pending {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.storage-manager-heading > div,
+.storage-pending > strong {
+  min-width: 0;
+}
+
+.storage-manager-heading span,
+.storage-pending span {
+  display: block;
+  color: var(--ink-500);
+  font-size: 11px;
+}
+
+.storage-manager-heading strong,
+.storage-pending strong {
+  display: block;
+  margin-top: 5px;
+  overflow-wrap: anywhere;
+  color: var(--ink-700);
+  font-size: 12px !important;
+}
+
+.storage-restart-badge {
+  flex: none;
+  padding: 6px 9px;
+  color: #956a19 !important;
+  border-radius: 6px;
+  background: #fff4d9;
+  font-weight: 650;
+}
+
+.storage-pending {
+  justify-content: flex-start;
+  margin-top: 14px;
+  padding: 10px 12px;
+  border: 1px solid #bedbd7;
+  border-radius: 8px;
+  background: #f0faf8;
+}
+
+.storage-pending span {
+  flex: none;
+}
+
+.storage-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+  margin-top: 14px;
+}
+
+.storage-note,
+.storage-browser-note {
+  color: var(--ink-500);
+  font-size: 11px;
+  line-height: 1.7;
+}
+
+.storage-note {
+  margin-top: 12px;
+}
+
+.storage-browser-note {
+  padding: 0 18px 18px;
+}
+
+.storage-manager .inline-alert {
+  margin-top: 12px;
+}
+
+.storage-success {
+  color: #187757;
+  border-color: #bfe6d5;
+  background: #effaf5;
+}
+
 .settings-modules {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   padding: 18px;

@@ -21,7 +21,7 @@
 - 分段模式：
   - 清单格式固定为 `segment_id,label,task_type,start_s,end_s`，时间以原始文件第一帧为 0 秒，片段不允许重叠；
   - `task_type` ∈ {`finger_opposition`, `hand_alternation`, `fist_clenching`}，**每段只运行对应动作的检测与评分**，其他任务不产生警告；
-  - `segments.json` 顶层可携带 `crop_region: [x, y, w, h]` 覆盖默认裁剪区域；CSV 无法携带，使用默认值；
+  - `segments.json` 顶层 `crop_region: [x, y, w, h]` 或 CSV 的 `crop_x/y/w/h` 可覆盖默认裁剪区域；`side=left/right` 可限定片段的评分侧别；
   - 每个分段独立维护检测状态并生成独立标注视频。
 - 视频视角、分辨率和帧率：
   - 视角：正面拍摄双手，相机放置在患者前方约 1m 处
@@ -62,7 +62,7 @@ side ∈ {`left`, `right`}
   - 幅度：以序列峰值 `max` 为基准，后一半 < 90% → 1 级，后一半 < 70% → 2 级，前一半 < 70% → 3 级
   - 抗误检：轮替方向需连续保持 `ALT_MIN_DIRECTION_TIME` 秒才确认；握拳 handedness 连续 3 帧稳定才切换标签
 - 输出文件：
-  - 每段（不分段时为整段）生成 VP8/WebM 标注视频：骨架（2px 线 + 2px 节点）、任务计数面板、ROI 裁剪区域绿框、时间轴；
+  - 每段（不分段时为整段）生成 VP8/WebM 骨架视频；计数、状态和时间轴以逐帧 `telemetry` 供前端侧栏同步展示；
   - 文件名 `<输入名>_<分段id>_hand_motion_annotated.webm`，路径只保存在 `output_artifacts`，前端通过受限输出接口读取。
 - `result_data` 结构：
   - 不分段：`{"tasks": {"finger_opposition": {left/right: {...}}, ...}}`
